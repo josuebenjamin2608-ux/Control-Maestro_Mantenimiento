@@ -1,0 +1,305 @@
+// Prisma schema — Control Maestro Mantenimiento
+// Domain foundation for an industrial CMMS. See README.md ("Decisiones de
+// arquitectura") for the reasoning behind the relations below.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+// Prisma 7: the connection URL is no longer read from schema.prisma. Migrate
+// reads it from prisma7.config.ts; PrismaClient at runtime receives it via a
+// driver adapter (see src/lib/db.ts) instead.
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Usuarios y permisos
+// ---------------------------------------------------------------------------
+
+/// Coarse-grained access role (ADMIN, SUPERVISOR, TECHNICIAN, VIEWER, ...).
+/// Kept as its own table (not an enum) so roles can be renamed/added without
+/// a schema migration. Fine-grained per-action permissions are a later phase.
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  users       User[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("roles")
+}
+
+/// System account. Deliberately minimal: only the fields needed to
+/// authenticate and authorize. `passwordHash` is nullable so an account can
+/// exist before a credentials-based auth provider is wired up (phase 2).
+model User {
+  id           String      @id @default(cuid())
+  name         String
+  email        String      @unique
+  passwordHash String?
+  isActive     Boolean     @default(true)
+  roleId       String
+  role         Role        @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  technician   Technician?
+
+  createdOrders     MaintenanceOrder[]  @relation("MaintenanceOrderCreatedBy")
+  inventoryMovements InventoryMovement[] @relation("InventoryMovementPerformedBy")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// Técnicos
+// ---------------------------------------------------------------------------
+
+/// Operational profile of a maintenance technician. Separate from `User`
+/// because not every technician needs a system login (and not every user is
+/// a technician) — the link is an optional 1:1 so either record can exist
+/// on its own.
+model Technician {
+  id           String   @id @default(cuid())
+  employeeCode String   @unique
+  fullName     String
+  specialty    String?
+  phone        String?
+  isActive     Boolean  @default(true)
+
+  userId String? @unique
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  assignedOrders MaintenanceOrder[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("technicians")
+}
+
+// ---------------------------------------------------------------------------
+// Máquinas y activos
+// ---------------------------------------------------------------------------
+
+enum MachineStatus {
+  OPERATIONAL
+  UNDER_MAINTENANCE
+  OUT_OF_SERVICE
+  DECOMMISSIONED
+}
+
+enum MachineCriticality {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+/// An industrial asset (machine, line, equipment). `criticality` drives
+/// preventive-maintenance prioritization; `status` reflects current
+/// operational state and is distinct from criticality (a low-criticality
+/// machine can still be out of service).
+model Machine {
+  id           String             @id @default(cuid())
+  code         String             @unique
+  name         String
+  description  String?
+  location     String?
+  manufacturer String?
+  model        String?
+  serialNumber String?
+  status       MachineStatus      @default(OPERATIONAL)
+  criticality  MachineCriticality @default(MEDIUM)
+  installedAt  DateTime?
+
+  maintenanceOrders  MaintenanceOrder[]
+  maintenancePlans   MaintenancePlan[]
+  maintenanceHistory MaintenanceHistory[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("machines")
+}
+
+// ---------------------------------------------------------------------------
+// Mantenimiento preventivo (planes) y correctivo/averías/reformas (órdenes)
+// ---------------------------------------------------------------------------
+
+enum PlanFrequencyType {
+  DAYS
+  WEEKS
+  MONTHS
+  USAGE_HOURS
+}
+
+/// A recurring preventive-maintenance schedule for a machine. Supports both
+/// calendar-based (DAYS/WEEKS/MONTHS) and usage-based (USAGE_HOURS) intervals
+/// because industrial equipment is commonly serviced by hour-meter readings
+/// rather than the calendar alone.
+model MaintenancePlan {
+  id              String            @id @default(cuid())
+  name            String
+  description     String?
+  frequencyType   PlanFrequencyType
+  frequencyValue  Int
+  isActive        Boolean           @default(true)
+  lastGeneratedAt DateTime?
+
+  machineId String
+  machine   Machine @relation(fields: [machineId], references: [id], onDelete: Restrict)
+
+  maintenanceOrders MaintenanceOrder[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("maintenance_plans")
+}
+
+/// PREVENTIVE and CORRECTIVE are the classic pair; BREAKDOWN (avería) and
+/// MODIFICATION (reforma) are modeled as order types rather than separate
+/// tables, since they share the exact same workflow (assignment, execution,
+/// parts consumption, history) and only differ in intent/reporting.
+enum MaintenanceType {
+  PREVENTIVE
+  CORRECTIVE
+  BREAKDOWN
+  MODIFICATION
+}
+
+enum MaintenancePriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum MaintenanceOrderStatus {
+  OPEN
+  IN_PROGRESS
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+/// The operational work order — the core unit of work in the system.
+model MaintenanceOrder {
+  id          String                  @id @default(cuid())
+  code        String                  @unique
+  title       String
+  description String?
+  type        MaintenanceType
+  priority    MaintenancePriority     @default(MEDIUM)
+  status      MaintenanceOrderStatus  @default(OPEN)
+
+  machineId String
+  machine   Machine @relation(fields: [machineId], references: [id], onDelete: Restrict)
+
+  planId String?
+  plan   MaintenancePlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
+
+  assignedTechnicianId String?
+  assignedTechnician   Technician? @relation(fields: [assignedTechnicianId], references: [id], onDelete: SetNull)
+
+  createdById String?
+  createdBy   User?   @relation("MaintenanceOrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  scheduledAt DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  inventoryMovements InventoryMovement[]
+  historyEntry       MaintenanceHistory?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("maintenance_orders")
+}
+
+// ---------------------------------------------------------------------------
+// Inventario y repuestos
+// ---------------------------------------------------------------------------
+
+enum InventoryMovementType {
+  IN
+  OUT
+  ADJUSTMENT
+}
+
+/// `currentStock` is a derived cache kept in sync from `InventoryMovement`
+/// entries (the ledger / source of truth), so list views don't need to sum
+/// the ledger on every read.
+model SparePart {
+  id           String   @id @default(cuid())
+  code         String   @unique
+  name         String
+  description  String?
+  unit         String
+  currentStock Decimal  @default(0) @db.Decimal(12, 3)
+  minimumStock Decimal? @db.Decimal(12, 3)
+  location     String?
+
+  inventoryMovements InventoryMovement[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("spare_parts")
+}
+
+/// Append-only inventory ledger entry. Each row is one stock movement;
+/// `SparePart.currentStock` is the running total derived from these.
+model InventoryMovement {
+  id       String                 @id @default(cuid())
+  type     InventoryMovementType
+  quantity Decimal                @db.Decimal(12, 3)
+  reason   String?
+
+  sparePartId String
+  sparePart   SparePart @relation(fields: [sparePartId], references: [id], onDelete: Restrict)
+
+  maintenanceOrderId String?
+  maintenanceOrder   MaintenanceOrder? @relation(fields: [maintenanceOrderId], references: [id], onDelete: SetNull)
+
+  performedById String?
+  performedBy   User?   @relation("InventoryMovementPerformedBy", fields: [performedById], references: [id], onDelete: SetNull)
+
+  occurredAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  @@map("inventory_movements")
+}
+
+// ---------------------------------------------------------------------------
+// Historial de mantenimiento (fuente de datos para indicadores/reportes)
+// ---------------------------------------------------------------------------
+
+/// Immutable historical record of a completed intervention on a machine.
+/// Kept separate from `MaintenanceOrder` (the live, mutable work order) so
+/// reporting/KPI fields (downtime, cost) don't leak into the operational
+/// model, and so history survives independently of how orders are managed
+/// later. One order produces at most one history entry.
+model MaintenanceHistory {
+  id      String          @id @default(cuid())
+  type    MaintenanceType
+  summary String
+  performedAt      DateTime
+  downtimeMinutes  Int?
+  cost             Decimal? @db.Decimal(12, 2)
+
+  machineId String
+  machine   Machine @relation(fields: [machineId], references: [id], onDelete: Restrict)
+
+  maintenanceOrderId String?           @unique
+  maintenanceOrder   MaintenanceOrder? @relation(fields: [maintenanceOrderId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@map("maintenance_history")
+}
