@@ -3,9 +3,11 @@ import {
   BarChart3,
   ClipboardList,
   Factory,
+  FileText,
   History,
   LayoutDashboard,
   Package,
+  UploadCloud,
   Users,
   Wrench,
 } from "lucide-react";
@@ -25,6 +27,20 @@ export const NAV_ITEMS: NavItem[] = [
     description: "Vista general del sistema",
     href: "/",
     icon: LayoutDashboard,
+    available: true,
+  },
+  {
+    title: "Solicitudes",
+    description: "Registro de solicitudes y su historial de minutas",
+    href: "/solicitudes",
+    icon: FileText,
+    available: true,
+  },
+  {
+    title: "Importaciones",
+    description: "Cargar y conciliar archivos de Solicitudes y Minutas",
+    href: "/importaciones",
+    icon: UploadCloud,
     available: true,
   },
   {

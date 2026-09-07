@@ -47,6 +47,7 @@ model User {
 
   createdOrders     MaintenanceOrder[]  @relation("MaintenanceOrderCreatedBy")
   inventoryMovements InventoryMovement[] @relation("InventoryMovementPerformedBy")
+  importBatches      ImportBatch[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -302,4 +303,213 @@ model MaintenanceHistory {
   createdAt DateTime @default(now())
 
   @@map("maintenance_history")
+}
+
+// ---------------------------------------------------------------------------
+// Fase 2 — Solicitudes y Minutas (motor de importación desde Excel)
+//
+// `MaintenanceRequest`/`MaintenanceLog` son un flujo operativo DISTINTO e
+// independiente de `MaintenanceOrder`/`MaintenanceHistory`: representan
+// exactamente los archivos "Registro de Solicitudes" y "Registro de Minutas"
+// que ya usa la operación, con sus columnas y semántica propias (PARTE,
+// REGISTRO, OBSERVACIONES, etc.). No se fusionan ni se reemplazan entre sí.
+// Los nombres de campo siguen literalmente los encabezados de cada archivo
+// para que el mapeo Excel -> base de datos sea trazable sin traducciones.
+// ---------------------------------------------------------------------------
+
+/// Registro de Solicitudes: fuente principal del flujo. `parte` es el
+/// identificador externo único (columna PARTE del Excel). No se vincula
+/// todavía a Machine/User/Technician: los datos de máquina/empleado se
+/// guardan tal como llegan del archivo (fase posterior de conciliación).
+model MaintenanceRequest {
+  id       String    @id @default(cuid())
+  parte    String    @unique
+  codigo   String?
+  maquina  String?
+  pieza    String?
+  problema String?
+  tarea    String?
+  fecha    DateTime?
+  codemple String?
+  empleado String?
+  /// Texto crudo de la columna ESTADO. No se normaliza a un enum propio para
+  /// no inventar vocabulario que no viene de la fuente.
+  estado   String?
+
+  /// true si esta solicitud se cargó marcando explícitamente la importación
+  /// como "histórico inicial" (nunca se infiere automáticamente).
+  isHistorical Boolean @default(false)
+
+  logs          MaintenanceLog[]
+  importResults ImportRequestResult[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([fecha])
+  @@map("maintenance_requests")
+}
+
+enum MaintenanceLogRelationStatus {
+  /// Tiene un valor en OBSERVACIONES pero ninguna MaintenanceRequest con ese
+  /// PARTE existe todavía.
+  PENDING
+  /// Se relacionó exitosamente con una MaintenanceRequest.
+  RELATED
+  /// OBSERVACIONES viene vacío: no hay PARTE que relacionar.
+  UNRELATED
+}
+
+/// Registro de Minutas: fuente complementaria. `registro` es el
+/// identificador externo único (columna REGISTRO del Excel). Nunca crea una
+/// MaintenanceRequest automáticamente.
+model MaintenanceLog {
+  id       String @id @default(cuid())
+  registro String @unique
+
+  fechaini  DateTime?
+  orden     String?
+  maquina   String?
+  oper      String?
+  nombreord String?
+  ccosto    String?
+  operacion String?
+  /// Texto crudo: el formato numérico/unidad no está garantizado por la fuente.
+  cantidad  String?
+  codemp    String?
+  empleado  String?
+  fechafin  DateTime?
+  /// Texto crudo: los formatos de hora exportados por Excel son
+  /// inconsistentes; se preserva tal cual para no inventar una hora mal
+  /// interpretada. Se puede tipar con precisión cuando se valide con un
+  /// archivo real.
+  horaini   String?
+  horafin   String?
+  minutos   Int?
+  observaciones String?
+
+  /// OBSERVACIONES ya recortado (trim), usado para la conciliación por
+  /// PARTE. Se conserva aunque la relación cambie después.
+  parteRaw       String?
+  relationStatus MaintenanceLogRelationStatus @default(PENDING)
+
+  maintenanceRequestId String?
+  maintenanceRequest   MaintenanceRequest? @relation(fields: [maintenanceRequestId], references: [id], onDelete: SetNull)
+
+  importResults ImportLogResult[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([parteRaw])
+  @@index([relationStatus])
+  @@map("maintenance_logs")
+}
+
+// ---------------------------------------------------------------------------
+// Registro de importaciones (trazabilidad)
+// ---------------------------------------------------------------------------
+
+enum ImportFileType {
+  MAINTENANCE_REQUEST
+  MAINTENANCE_LOG
+}
+
+/// Un registro por archivo confirmado. Nunca se sobrescribe: cada carga crea
+/// una fila nueva, incluso si el archivo es idéntico a uno anterior.
+model ImportBatch {
+  id       String         @id @default(cuid())
+  fileType ImportFileType
+  fileName String
+
+  /// Solo aplica a MAINTENANCE_REQUEST. Se marca explícitamente por el
+  /// usuario al confirmar la importación ("Esta carga corresponde al
+  /// HISTÓRICO INICIAL"); nunca se infiere de si es el primer batch.
+  isHistorical Boolean @default(false)
+
+  totalRows  Int
+  errorCount Int
+
+  /// `newCount`: filas nuevas, aplica a ambos tipos de archivo.
+  /// `modifiedCount`/`unchangedCount`: solo aplica a MAINTENANCE_REQUEST.
+  newCount       Int?
+  modifiedCount  Int?
+  unchangedCount Int?
+
+  /// Solo aplica a MAINTENANCE_LOG. `relatedCount`/`pendingCount` son un
+  /// desglose de `newCount` (una minuta nueva sin PARTE en OBSERVACIONES
+  /// cuenta en `newCount` pero no en ninguno de estos dos).
+  alreadyExistsCount Int?
+  relatedCount       Int?
+  pendingCount       Int?
+
+  /// Solo aplica a MAINTENANCE_REQUEST: minutas PENDING que se relacionaron
+  /// retroactivamente como efecto de esta carga.
+  retroactivelyRelatedCount Int?
+
+  importedById String?
+  importedBy   User?   @relation(fields: [importedById], references: [id], onDelete: SetNull)
+
+  requestResults ImportRequestResult[]
+  logResults     ImportLogResult[]
+
+  createdAt DateTime @default(now())
+
+  @@index([fileType, createdAt])
+  @@map("import_batches")
+}
+
+enum RequestRowOutcome {
+  NEW
+  MODIFIED
+  UNCHANGED
+  ERROR
+}
+
+/// Resultado de una fila individual dentro de un ImportBatch de Solicitudes.
+model ImportRequestResult {
+  id            String      @id @default(cuid())
+  importBatchId String
+  importBatch   ImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+
+  parte        String
+  outcome      RequestRowOutcome
+  errorMessage String?
+
+  maintenanceRequestId String?
+  maintenanceRequest   MaintenanceRequest? @relation(fields: [maintenanceRequestId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([parte])
+  @@map("import_request_results")
+}
+
+enum LogRowOutcome {
+  NEW
+  ALREADY_EXISTS
+  ERROR
+}
+
+/// Resultado de una fila individual dentro de un ImportBatch de Minutas.
+model ImportLogResult {
+  id            String      @id @default(cuid())
+  importBatchId String
+  importBatch   ImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+
+  registro String
+  outcome  LogRowOutcome
+  /// Snapshot del estado de relación en el momento de esta importación (la
+  /// relación "en vivo" vive en MaintenanceLog.relationStatus y puede
+  /// cambiar después; esto queda fijo para saber qué pasó en esta carga).
+  relationOutcome MaintenanceLogRelationStatus?
+  errorMessage    String?
+
+  maintenanceLogId String?
+  maintenanceLog    MaintenanceLog? @relation(fields: [maintenanceLogId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([registro])
+  @@map("import_log_results")
 }
