@@ -13,7 +13,7 @@ import {
   previewMaintenanceLogFile,
   type MaintenanceLogPreviewPayload,
 } from "@/server/actions/imports";
-import { OutcomeBadge } from "./outcome-badge";
+import { HistoricalBadge, OutcomeBadge } from "./outcome-badge";
 
 type Stage = "idle" | "loading" | "preview" | "confirming" | "done";
 
@@ -21,8 +21,11 @@ export function MinutasImportPanel() {
   const [stage, setStage] = useState<Stage>("idle");
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<MaintenanceLogPreviewPayload | null>(null);
+  const [isHistorical, setIsHistorical] = useState(false);
   const [confirmResult, setConfirmResult] = useState<{ importBatchId: string } | null>(null);
   const [isPending, startTransition] = useTransition();
+
+  const isLocked = stage !== "idle";
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -36,6 +39,7 @@ export function MinutasImportPanel() {
 
     const formData = new FormData();
     formData.set("file", file);
+    formData.set("isHistorical", String(isHistorical));
 
     startTransition(async () => {
       const result = await previewMaintenanceLogFile(formData);
@@ -55,6 +59,7 @@ export function MinutasImportPanel() {
     startTransition(async () => {
       const result = await confirmMaintenanceLogFile({
         fileName: preview.fileName,
+        isHistorical,
         rows: preview.rows,
       });
       if (!result.ok) {
@@ -71,6 +76,7 @@ export function MinutasImportPanel() {
     setPreview(null);
     setConfirmResult(null);
     setError(null);
+    setIsHistorical(false);
     setStage("idle");
   }
 
@@ -85,6 +91,25 @@ export function MinutasImportPanel() {
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        <label className="flex items-start gap-2 rounded-md border border-border bg-secondary/30 p-3 text-sm text-foreground">
+          <input
+            type="checkbox"
+            checked={isHistorical}
+            disabled={isLocked}
+            onChange={(event) => setIsHistorical(event.target.checked)}
+            className="mt-0.5 size-4 rounded border-input"
+          />
+          <span>
+            Esta carga corresponde al <strong>HISTÓRICO INICIAL</strong> de minutas.
+            <br />
+            <span className="text-xs text-muted-foreground">
+              Las minutas históricas se importan tal cual, sin intentar relacionarlas con ninguna
+              solicitud (OBSERVACIONES en el archivo histórico no contiene necesariamente una
+              PARTE). Selecciona esta opción antes de elegir el archivo.
+            </span>
+          </span>
+        </label>
+
         {stage === "idle" || stage === "loading" ? (
           <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground hover:bg-secondary/50">
             <UploadCloud className="size-6" />
@@ -111,10 +136,17 @@ export function MinutasImportPanel() {
           <div className="flex flex-col gap-4">
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <span className="font-medium text-foreground">{preview.fileName}</span>
+              <HistoricalBadge isHistorical={isHistorical} />
               <Badge variant="success">{preview.summary.newCount} nuevas</Badge>
               <Badge variant="secondary">{preview.summary.alreadyExistsCount} ya existían</Badge>
-              <Badge variant="success">{preview.summary.relatedCount} relacionadas</Badge>
-              <Badge variant="warning">{preview.summary.pendingCount} pendientes de relación</Badge>
+              {isHistorical ? null : (
+                <>
+                  <Badge variant="success">{preview.summary.relatedCount} relacionadas</Badge>
+                  <Badge variant="warning">
+                    {preview.summary.pendingCount} pendientes de relación
+                  </Badge>
+                </>
+              )}
               {preview.summary.errorCount > 0 ? (
                 <Badge variant="destructive">{preview.summary.errorCount} errores</Badge>
               ) : null}
@@ -142,7 +174,7 @@ export function MinutasImportPanel() {
                       </TableCell>
                       <TableCell>
                         {row.outcome === "NEW" && row.relationOutcome ? (
-                          <OutcomeBadge outcome={row.relationOutcome} />
+                          <OutcomeBadge outcome={row.relationOutcome} historical={isHistorical} />
                         ) : (
                           "—"
                         )}

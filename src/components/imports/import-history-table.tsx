@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/badge";
+import { HistoricalBadge } from "@/components/imports/outcome-badge";
 import {
   Table,
   TableBody,
@@ -53,7 +54,7 @@ export function ImportHistoryTable({ batches }: { batches: ImportBatchWithUser[]
               <TableCell>
                 <div className="flex items-center gap-1.5">
                   {FILE_TYPE_LABELS[batch.fileType]}
-                  {batch.isHistorical ? <Badge variant="outline">Histórico</Badge> : null}
+                  <HistoricalBadge isHistorical={batch.isHistorical} />
                 </div>
               </TableCell>
               <TableCell className="max-w-48 truncate" title={batch.fileName}>
@@ -68,6 +69,11 @@ export function ImportHistoryTable({ batches }: { batches: ImportBatchWithUser[]
                     {batch.retroactivelyRelatedCount
                       ? ` · ${batch.retroactivelyRelatedCount} minutas relacionadas`
                       : ""}
+                  </span>
+                ) : batch.isHistorical ? (
+                  <span>
+                    {batch.newCount ?? 0} nuevas (históricas, sin relación) ·{" "}
+                    {batch.alreadyExistsCount ?? 0} ya existían
                   </span>
                 ) : (
                   <span>

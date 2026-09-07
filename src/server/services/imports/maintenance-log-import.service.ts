@@ -20,7 +20,7 @@ export interface MaintenanceLogPreviewRow {
   rowNumber: number;
   registro: string | null;
   outcome: MaintenanceLogRowOutcome;
-  /** Only meaningful when outcome === "NEW". */
+  /** Only meaningful when outcome === "NEW". Always "UNRELATED" when the import is historical. */
   relationOutcome?: MaintenanceLogRelationOutcome;
   errorMessage?: string;
   data?: MaintenanceLogRow;
@@ -91,14 +91,23 @@ export async function parseMaintenanceLogFile(fileBuffer: Buffer): Promise<Parse
 }
 
 /**
- * Classifies each row against the CURRENT database state (dedup by REGISTRO,
- * relation lookup by OBSERVACIONES -> MaintenanceRequest.parte, exact match
- * only — no fuzzy matching). Takes an explicit client so preview (uses `db`)
- * and apply (uses the active `tx`) see a consistent snapshot.
+ * Classifies each row against the CURRENT database state: dedup by
+ * REGISTRO, and — only for non-historical imports — relation lookup by
+ * OBSERVACIONES -> MaintenanceRequest.parte (exact match, no fuzzy
+ * matching). Historical imports (`isHistorical: true`) never attempt this
+ * lookup at all: the historical file predates the PARTE-in-OBSERVACIONES
+ * convention, so its OBSERVACIONES is free-form maintenance text (or
+ * blank) and must never be interpreted as a PARTE reference — every valid
+ * row is classified NEW/ALREADY_EXISTS with relationOutcome "UNRELATED",
+ * never as an error for lacking a PARTE.
+ *
+ * Takes an explicit client so preview (uses `db`) and apply (uses the
+ * active `tx`) see a consistent snapshot.
  */
 async function classifyRows(
   client: Prisma.TransactionClient,
   rows: ParsedMaintenanceLogRowResult[],
+  isHistorical: boolean,
 ): Promise<MaintenanceLogPreviewRow[]> {
   const registros = rows.filter((row) => row.ok).map((row) => row.data.registro);
   const existingLogs = registros.length
@@ -109,21 +118,24 @@ async function classifyRows(
     : [];
   const existingLogByRegistro = new Map(existingLogs.map((log) => [log.registro, log.id]));
 
-  const partesToCheck = Array.from(
-    new Set(
-      rows
-        .filter((row) => row.ok && row.data.observaciones)
-        .map((row) => (row as { ok: true; data: MaintenanceLogRow }).data.observaciones!.trim())
-        .filter((value) => value.length > 0),
-    ),
-  );
-  const matchingRequests = partesToCheck.length
-    ? await client.maintenanceRequest.findMany({
-        where: { parte: { in: partesToCheck } },
-        select: { parte: true },
-      })
-    : [];
-  const requestPartes = new Set(matchingRequests.map((request) => request.parte));
+  let requestPartes: Set<string> | null = null;
+  if (!isHistorical) {
+    const partesToCheck = Array.from(
+      new Set(
+        rows
+          .filter((row) => row.ok && row.data.observaciones)
+          .map((row) => (row as { ok: true; data: MaintenanceLogRow }).data.observaciones!.trim())
+          .filter((value) => value.length > 0),
+      ),
+    );
+    const matchingRequests = partesToCheck.length
+      ? await client.maintenanceRequest.findMany({
+          where: { parte: { in: partesToCheck } },
+          select: { parte: true },
+        })
+      : [];
+    requestPartes = new Set(matchingRequests.map((request) => request.parte));
+  }
 
   const seenInFile = new Set<string>();
   const result: MaintenanceLogPreviewRow[] = [];
@@ -158,12 +170,14 @@ async function classifyRows(
       continue;
     }
 
-    const parteRaw = row.data.observaciones ? row.data.observaciones.trim() : null;
-    const relationOutcome: MaintenanceLogRelationOutcome = !parteRaw
-      ? "UNRELATED"
-      : requestPartes.has(parteRaw)
-        ? "RELATED"
-        : "PENDING";
+    let relationOutcome: MaintenanceLogRelationOutcome;
+    if (isHistorical) {
+      // Nunca se interpreta OBSERVACIONES como PARTE en una carga histórica.
+      relationOutcome = "UNRELATED";
+    } else {
+      const parteRaw = row.data.observaciones ? row.data.observaciones.trim() : null;
+      relationOutcome = !parteRaw ? "UNRELATED" : requestPartes!.has(parteRaw) ? "RELATED" : "PENDING";
+    }
 
     result.push({
       rowNumber: row.rowNumber,
@@ -191,12 +205,14 @@ function summarize(rows: MaintenanceLogPreviewRow[]): MaintenanceLogPreviewSumma
 
 export async function previewMaintenanceLogImport(
   rows: ParsedMaintenanceLogRowResult[],
+  isHistorical: boolean,
 ): Promise<MaintenanceLogPreviewSummary> {
-  return summarize(await classifyRows(db, rows));
+  return summarize(await classifyRows(db, rows, isHistorical));
 }
 
 export interface ApplyMaintenanceLogImportInput {
   fileName: string;
+  isHistorical: boolean;
   rows: ParsedMaintenanceLogRowResult[];
   importedById?: string | null;
 }
@@ -211,12 +227,17 @@ export async function applyMaintenanceLogImport(
 ): Promise<ApplyMaintenanceLogImportResult> {
   return db.$transaction(
     async (tx) => {
-      const classified = await classifyRows(tx, input.rows);
+      const classified = await classifyRows(tx, input.rows, input.isHistorical);
 
       for (const row of classified) {
         if (row.outcome !== "NEW" || !row.data) continue;
 
-        const parteRaw = row.data.observaciones ? row.data.observaciones.trim() : null;
+        // parteRaw solo se calcula/usa para cargas no históricas: una carga
+        // histórica nunca interpreta OBSERVACIONES como PARTE, ni siquiera
+        // para guardar el intento como referencia.
+        const parteRaw =
+          !input.isHistorical && row.data.observaciones ? row.data.observaciones.trim() : null;
+
         let maintenanceRequestId: string | null = null;
         if (row.relationOutcome === "RELATED" && parteRaw) {
           const request = await tx.maintenanceRequest.findUnique({
@@ -251,6 +272,7 @@ export async function applyMaintenanceLogImport(
             parteRaw,
             relationStatus: row.relationOutcome ?? "UNRELATED",
             maintenanceRequestId,
+            isHistorical: input.isHistorical,
           },
         });
         row.logId = created.id;
@@ -262,6 +284,7 @@ export async function applyMaintenanceLogImport(
         data: {
           fileType: "MAINTENANCE_LOG",
           fileName: input.fileName,
+          isHistorical: input.isHistorical,
           totalRows: summary.totalRows,
           errorCount: summary.errorCount,
           newCount: summary.newCount,

@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
 import { AppShell } from "@/components/layout/app-shell";
-import { Badge } from "@/components/ui/badge";
+import { HistoricalBadge, OutcomeBadge } from "@/components/imports/outcome-badge";
 import {
   Card,
   CardContent,
@@ -65,7 +65,7 @@ export default async function SolicitudDetailPage({
           <CardHeader>
             <div className="flex items-center gap-2">
               <CardTitle className="text-lg text-foreground">PARTE {request.parte}</CardTitle>
-              {request.isHistorical ? <Badge variant="outline">Histórica</Badge> : null}
+              <HistoricalBadge isHistorical={request.isHistorical} />
             </div>
             <CardDescription>Información de la solicitud tal como fue importada.</CardDescription>
           </CardHeader>
@@ -115,6 +115,8 @@ export default async function SolicitudDetailPage({
                       <TableHead>Minutos</TableHead>
                       <TableHead>Operación</TableHead>
                       <TableHead>Observación</TableHead>
+                      <TableHead>Origen</TableHead>
+                      <TableHead>Relación</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -135,6 +137,12 @@ export default async function SolicitudDetailPage({
                         <TableCell>{log.operacion ?? "—"}</TableCell>
                         <TableCell className="max-w-48 truncate" title={log.observaciones ?? undefined}>
                           {log.observaciones ?? "—"}
+                        </TableCell>
+                        <TableCell>
+                          <HistoricalBadge isHistorical={log.isHistorical} />
+                        </TableCell>
+                        <TableCell>
+                          <OutcomeBadge outcome={log.relationStatus} historical={log.isHistorical} />
                         </TableCell>
                       </TableRow>
                     ))}

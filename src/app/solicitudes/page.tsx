@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Search } from "lucide-react";
 
 import { AppShell } from "@/components/layout/app-shell";
-import { Badge } from "@/components/ui/badge";
+import { HistoricalBadge } from "@/components/imports/outcome-badge";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Table,
@@ -80,11 +80,9 @@ export default async function SolicitudesPage({
                           >
                             {request.parte}
                           </Link>
-                          {request.isHistorical ? (
-                            <Badge variant="outline" className="ml-2">
-                              Histórica
-                            </Badge>
-                          ) : null}
+                          <span className="ml-2">
+                            <HistoricalBadge isHistorical={request.isHistorical} />
+                          </span>
                         </TableCell>
                         <TableCell>{request.maquina ?? "—"}</TableCell>
                         <TableCell className="max-w-64 truncate" title={request.problema ?? undefined}>

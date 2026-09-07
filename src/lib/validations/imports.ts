@@ -90,6 +90,7 @@ export type ConfirmMaintenanceRequestImportInput = z.infer<
 
 export const confirmMaintenanceLogImportSchema = z.object({
   fileName: z.string().trim().min(1),
+  isHistorical: z.boolean(),
   rows: z.array(parsedMaintenanceLogRowResultSchema),
 });
 export type ConfirmMaintenanceLogImportInput = z.infer<typeof confirmMaintenanceLogImportSchema>;

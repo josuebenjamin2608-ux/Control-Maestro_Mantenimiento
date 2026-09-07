@@ -389,9 +389,18 @@ model MaintenanceLog {
   observaciones String?
 
   /// OBSERVACIONES ya recortado (trim), usado para la conciliación por
-  /// PARTE. Se conserva aunque la relación cambie después.
+  /// PARTE. Se conserva aunque la relación cambie después. Nunca se
+  /// calcula (queda null) para minutas históricas: ver `isHistorical`.
   parteRaw       String?
   relationStatus MaintenanceLogRelationStatus @default(PENDING)
+
+  /// true si esta minuta se cargó marcando explícitamente la importación
+  /// como "histórico inicial". Las minutas históricas fueron generadas
+  /// antes de que OBSERVACIONES tuviera el significado de PARTE, así que
+  /// nunca se intenta relacionarlas automáticamente (relationStatus queda
+  /// siempre UNRELATED) para no inventar una relación a partir de texto
+  /// descriptivo.
+  isHistorical Boolean @default(false)
 
   maintenanceRequestId String?
   maintenanceRequest   MaintenanceRequest? @relation(fields: [maintenanceRequestId], references: [id], onDelete: SetNull)
@@ -422,9 +431,11 @@ model ImportBatch {
   fileType ImportFileType
   fileName String
 
-  /// Solo aplica a MAINTENANCE_REQUEST. Se marca explícitamente por el
+  /// Aplica a ambos tipos de archivo. Se marca explícitamente por el
   /// usuario al confirmar la importación ("Esta carga corresponde al
-  /// HISTÓRICO INICIAL"); nunca se infiere de si es el primer batch.
+  /// HISTÓRICO INICIAL"); nunca se infiere de si es el primer batch. Las
+  /// cargas históricas de Solicitudes y de Minutas son independientes
+  /// entre sí.
   isHistorical Boolean @default(false)
 
   totalRows  Int

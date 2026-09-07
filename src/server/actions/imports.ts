@@ -134,7 +134,8 @@ export async function previewMaintenanceLogFile(
     };
   }
 
-  const summary = await previewMaintenanceLogImport(parsed.rows);
+  const isHistorical = formData.get("isHistorical") === "true";
+  const summary = await previewMaintenanceLogImport(parsed.rows, isHistorical);
   return { ok: true, data: { fileName: file.name, rows: parsed.rows, summary } };
 }
 
@@ -148,6 +149,7 @@ export async function confirmMaintenanceLogFile(
 
   const result = await applyMaintenanceLogImport({
     fileName: parseResult.data.fileName,
+    isHistorical: parseResult.data.isHistorical,
     rows: parseResult.data.rows,
   });
 

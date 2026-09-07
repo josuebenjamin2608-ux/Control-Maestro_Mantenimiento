@@ -25,10 +25,30 @@ const OUTCOME_VARIANTS: Record<string, BadgeVariant> = {
   UNRELATED: "outline",
 };
 
-export function OutcomeBadge({ outcome }: { outcome: string }) {
-  return (
-    <Badge variant={OUTCOME_VARIANTS[outcome] ?? "outline"}>
-      {OUTCOME_LABELS[outcome] ?? outcome}
-    </Badge>
+/**
+ * `historical` overrides the UNRELATED label/variant: a historical minuta
+ * without relation is an expected, permanent state ("histórica sin
+ * relación"), not the same thing as a new minuta still waiting for its
+ * PARTE to appear ("pendiente de relación") — they must read differently
+ * even though both are technically UNRELATED under the hood.
+ */
+export function OutcomeBadge({
+  outcome,
+  historical = false,
+}: {
+  outcome: string;
+  historical?: boolean;
+}) {
+  const label =
+    historical && outcome === "UNRELATED" ? "Histórica sin relación" : (OUTCOME_LABELS[outcome] ?? outcome);
+  return <Badge variant={OUTCOME_VARIANTS[outcome] ?? "outline"}>{label}</Badge>;
+}
+
+/** General historical/nueva distinction, independent of relation status. */
+export function HistoricalBadge({ isHistorical }: { isHistorical: boolean }) {
+  return isHistorical ? (
+    <Badge variant="outline">Histórico</Badge>
+  ) : (
+    <Badge variant="secondary">Nueva importación</Badge>
   );
 }
