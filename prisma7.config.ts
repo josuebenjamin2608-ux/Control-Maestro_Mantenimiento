@@ -9,6 +9,14 @@ export default defineConfig({
     path: "prisma/migrations",
   },
   datasource: {
-    url: process.env["DATABASE_URL"],
+    // Prisma CLI (migrate deploy, migrate dev, studio) necesita la conexión
+    // DIRECTA (sin pooler) — sobre una conexión pooled, el motor de
+    // migraciones puede fallar por los advisory locks / prepared statements
+    // que usa. DATABASE_URL (pooled) queda reservado para el cliente en
+    // runtime (src/lib/db.ts), que no pasa por este archivo. El fallback a
+    // DATABASE_URL cubre el desarrollo local con una única base sin
+    // distinción pooled/directa (ej. `prisma dev`), donde DIRECT_URL no
+    // existe.
+    url: process.env["DIRECT_URL"] ?? process.env["DATABASE_URL"],
   },
 });

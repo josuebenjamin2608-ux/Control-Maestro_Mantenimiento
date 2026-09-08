@@ -150,10 +150,13 @@ Definidas en `.env.example`:
 
 | Variable       | Descripción                                              |
 | -------------- | --------------------------------------------------------- |
-| `DATABASE_URL` | Cadena de conexión a PostgreSQL usada por Prisma y por la app. |
+| `DATABASE_URL` | Conexión **pooled** (a través de un connection pooler, ej. PgBouncer). La usa el cliente de Prisma en runtime (`src/lib/db.ts`) — es la que debe usar la aplicación desplegada. |
+| `DIRECT_URL`   | Conexión **directa** (sin pooler) a la misma base. La usa Prisma CLI (`prisma7.config.ts`) para `migrate deploy`, `migrate dev` y `studio`: el motor de migraciones puede fallar sobre una conexión pooled. |
 
 Copia `.env.example` a `.env` y reemplaza los valores por los de tu base de
-datos real. `.env` está excluido de git (ver `.gitignore`).
+datos real. `.env` está excluido de git (ver `.gitignore`). En desarrollo
+local con una sola base sin distinción pooled/directa, `DIRECT_URL` puede
+ser idéntica a `DATABASE_URL`.
 
 ## 6. Cómo configurar PostgreSQL
 
@@ -164,38 +167,43 @@ Cualquier instancia de PostgreSQL 14+ sirve. Opciones habituales:
   docker run --name control-maestro-db -e POSTGRES_PASSWORD=postgres \
     -e POSTGRES_DB=control_maestro_mantenimiento -p 5432:5432 -d postgres:16
   ```
-  y usar `DATABASE_URL="postgresql://postgres:postgres@localhost:5432/control_maestro_mantenimiento?schema=public"`.
+  y usar la misma cadena para `DATABASE_URL` y `DIRECT_URL` (no hay pooler
+  de por medio en este caso).
 - **Local vía Prisma:** `npx prisma dev` levanta un PostgreSQL local
-  administrado por Prisma, sin Docker.
+  administrado por Prisma, sin Docker (misma cadena para ambas variables).
 - **Gestionado (recomendado para producción/Vercel):** Neon, Supabase o
-  Vercel Postgres. Todos entregan una cadena `DATABASE_URL` compatible; si el
-  proveedor usa *connection pooling* (PgBouncer) para el runtime, revisa su
-  documentación sobre si necesitas una URL directa adicional para ejecutar
-  migraciones — no forma parte de esta fase, ya que aún no hay migraciones
-  generadas.
+  Vercel Postgres. Estos proveedores entregan **dos** cadenas de conexión:
+  una pooled (para `DATABASE_URL`) y una directa/non-pooling (para
+  `DIRECT_URL`) — usar la directa para `DATABASE_URL` también funcionaría,
+  pero usar la pooled para el runtime es importante en un entorno
+  serverless como Vercel (muchas invocaciones concurrentes de corta
+  duración). Revisa la documentación de tu proveedor para identificar cuál
+  cadena es cuál.
 
 ## 7. Cómo ejecutar Prisma
 
 El esquema vive en `prisma/schema.prisma`. La configuración de Prisma CLI
 (ruta del esquema, carpeta de migraciones, URL de conexión) vive en
-`prisma7.config.ts`, que lee `DATABASE_URL` desde `.env`.
+`prisma7.config.ts`, que usa `DIRECT_URL` (con fallback a `DATABASE_URL` si
+`DIRECT_URL` no está definida) desde `.env`.
 
 ```bash
 # Generar el cliente de Prisma (ya se ejecuta automáticamente en postinstall)
 npx prisma generate
 
-# Crear la primera migración y aplicarla a la base de datos configurada
-npx prisma migrate dev --name init
+# Aplicar las migraciones existentes a la base de datos configurada
+npx prisma migrate deploy
+
+# Crear una nueva migración durante desarrollo (contra DIRECT_URL)
+npx prisma migrate dev --name <nombre>
 
 # Ver/editar los datos con una UI
 npx prisma studio
 ```
 
-> Esta fase entrega el esquema base (`Role`, `User`, `Technician`, `Machine`,
-> `MaintenancePlan`, `MaintenanceOrder`, `SparePart`, `InventoryMovement`,
-> `MaintenanceHistory`) pero **todavía no se generó ninguna migración**: se
-> generará junto con el primer módulo funcional, para evitar migraciones
-> vacías o que deban revertirse por cambios de diseño.
+> La migración inicial (`prisma/migrations/`) ya cubre el esquema completo
+> de Fase 1 y Fase 2. Las próximas migraciones se generan igual, con
+> `migrate dev` en desarrollo y `migrate deploy` en producción/Preview.
 
 ## 8. Cómo desplegar en Vercel
 
@@ -203,14 +211,16 @@ npx prisma studio
    detecta automáticamente que es un proyecto Next.js (no requiere
    `vercel.json`).
 2. En **Project Settings → Environment Variables**, definir `DATABASE_URL`
-   con la cadena de conexión de tu PostgreSQL de producción (Neon, Supabase,
-   Vercel Postgres, etc.).
+   (conexión pooled) y `DIRECT_URL` (conexión directa/non-pooling) con las
+   cadenas de tu proveedor de PostgreSQL (Neon, Supabase, Vercel Postgres,
+   etc.), en los entornos que correspondan (Preview/Production).
 3. Desplegar. El script `postinstall` (`prisma generate`) se ejecuta
    automáticamente durante el build de Vercel, por lo que no hace falta
-   configuración adicional para Prisma.
-4. Antes de desplegar el primer módulo funcional, aplicar las migraciones
-   contra la base de datos de producción con `npx prisma migrate deploy`
-   (desde CI/CD o localmente apuntando a `DATABASE_URL` de producción).
+   configuración adicional para generar el cliente de Prisma.
+4. Aplicar las migraciones contra cada base de datos con
+   `npx prisma migrate deploy` (usando el `DIRECT_URL` del entorno
+   correspondiente) — esto no ocurre automáticamente durante el build salvo
+   que se configure explícitamente.
 
 ## Próxima fase
 
