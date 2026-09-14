@@ -180,6 +180,11 @@ Cualquier instancia de PostgreSQL 14+ sirve. Opciones habituales:
   duración). Revisa la documentación de tu proveedor para identificar cuál
   cadena es cuál.
 
+  Con proveedores serverless (ej. Neon) que suspenden el cómputo cuando está
+  inactivo, agregá `?connect_timeout=30` (o `&connect_timeout=30` si la URL
+  ya tiene otros parámetros) al final de `DIRECT_URL`, para tolerar el
+  arranque en frío durante `migrate deploy`.
+
 ## 7. Cómo ejecutar Prisma
 
 El esquema vive en `prisma/schema.prisma`. La configuración de Prisma CLI
