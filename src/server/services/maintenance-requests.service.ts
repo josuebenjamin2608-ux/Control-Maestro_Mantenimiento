@@ -203,6 +203,7 @@ export interface OperationalRequestsParams {
   /** Si se omite, se prioriza el orden de ESTADO_BUCKET_PRIORITY (no resueltas primero). */
   bucket?: EstadoBucket;
   sinceDays?: number;
+  /** Sin definir = sin límite (trae todas las filas que cumplan el filtro). */
   take?: number;
   /**
    * Solo aplica cuando no hay `bucket`: excluye "atendida" del listado por
@@ -217,15 +218,21 @@ export interface OperationalRequestsParams {
  * Listado operativo para el dashboard: usa `classifyEstado` (la misma
  * clasificación que `getDashboardStats`) para agrupar por bucket, así los
  * contadores de los KPI y las filas que muestra el filtro nunca divergen.
+ * El bucket "atendida" corresponde exactamente (y únicamente) a
+ * ESTADO = "Realizado" (comparación normalizada, ver classifyEstado) — por
+ * eso `excludeAtendida` implementa la regla "ESTADO != Realizado" de forma
+ * genérica: cualquier otro valor de ESTADO, conocido o no, cae en algún
+ * bucket que SÍ se incluye (los desconocidos van a "otro").
  *
  * Sin `bucket`, recorre ESTADO_BUCKET_PRIORITY (pendiente > espera >
  * programada > otro > atendida) y va completando `take` con las solicitudes
  * más recientes de cada grupo — nunca usa `isHistorical` para ordenar, ya
  * que ese flag describe el contexto de importación, no la antigüedad real
- * de la solicitud (que viene de `fecha`).
+ * de la solicitud (que viene de `fecha`). Sin `take`, no hay límite: trae
+ * TODAS las filas de cada bucket incluido.
  */
 export async function listOperationalMaintenanceRequests(params: OperationalRequestsParams = {}) {
-  const { bucket, sinceDays, take = 8, excludeAtendida = false } = params;
+  const { bucket, sinceDays, take, excludeAtendida = false } = params;
 
   const dateWhere: Prisma.MaintenanceRequestWhereInput | undefined = sinceDays
     ? { fecha: { gte: new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000) } }
@@ -240,8 +247,8 @@ export async function listOperationalMaintenanceRequests(params: OperationalRequ
     estadosByBucket.set(estadoBucket, list);
   }
 
-  async function fetchBucket(targetBucket: EstadoBucket, limit: number) {
-    if (limit <= 0) return [];
+  async function fetchBucket(targetBucket: EstadoBucket, limit: number | undefined) {
+    if (limit !== undefined && limit <= 0) return [];
     const estados = estadosByBucket.get(targetBucket) ?? [];
 
     let estadoWhere: Prisma.MaintenanceRequestWhereInput;
@@ -257,7 +264,7 @@ export async function listOperationalMaintenanceRequests(params: OperationalRequ
     return db.maintenanceRequest.findMany({
       where: { ...(dateWhere ?? {}), ...estadoWhere },
       orderBy: { fecha: "desc" },
-      take: limit,
+      ...(limit !== undefined ? { take: limit } : {}),
       include: { _count: { select: { logs: true } } },
     });
   }
@@ -272,8 +279,8 @@ export async function listOperationalMaintenanceRequests(params: OperationalRequ
 
   const results: Awaited<ReturnType<typeof fetchBucket>> = [];
   for (const priorityBucket of priority) {
-    if (results.length >= take) break;
-    const rows = await fetchBucket(priorityBucket, take - results.length);
+    if (take !== undefined && results.length >= take) break;
+    const rows = await fetchBucket(priorityBucket, take !== undefined ? take - results.length : undefined);
     results.push(...rows);
   }
   return results;

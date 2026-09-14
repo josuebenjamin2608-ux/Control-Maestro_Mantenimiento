@@ -121,9 +121,12 @@ export default async function DashboardPage({
     listOperationalMaintenanceRequests({
       bucket: selectedBucket,
       sinceDays: selectedRange.sinceDays,
-      take: selectedBucket ? 15 : 8,
-      // Vista por defecto ("Solicitudes que requieren atención"): nunca
-      // muestra Realizado. El KPI Total (bucket=todas) sí las incluye.
+      // Vista por defecto ("Solicitudes que requieren atención"): ESTADO !=
+      // Realizado, SIN límite artificial — deben verse todas. Con un bucket
+      // específico seleccionado (KPI clickeado) se mantiene un tope
+      // razonable, ya que ese caso no forma parte de este ajuste.
+      take: selectedBucket ? 15 : undefined,
+      // Nunca muestra Realizado. El KPI Total (bucket=todas) sí las incluye.
       excludeAtendida: !bucketParam,
     }),
   ]);
@@ -270,7 +273,7 @@ export default async function DashboardPage({
               </div>
             </div>
             <Card>
-              <CardContent className="px-0">
+              <CardContent className="max-h-[32rem] overflow-y-auto px-0">
                 <SolicitudesTable
                   items={operationalRequests}
                   compact
