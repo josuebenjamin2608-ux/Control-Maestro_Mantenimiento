@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, UserRound } from "lucide-react";
 
 import { AppShell } from "@/components/layout/app-shell";
 import { HistoricalBadge } from "@/components/imports/outcome-badge";
@@ -29,6 +29,28 @@ function Field({ label, value }: { label: string; value: string | null | undefin
       </span>
       <span className="text-sm text-foreground">{value?.trim() ? value : "—"}</span>
     </div>
+  );
+}
+
+/** Para Problema/Tarea: texto completo (nunca truncado), a diferencia de la tabla. */
+function TextBlock({ label, value }: { label: string; value: string | null | undefined }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </span>
+      <p className="whitespace-pre-wrap text-sm text-foreground">
+        {value?.trim() ? value : "—"}
+      </p>
+    </div>
+  );
+}
+
+function SectionLabel({ children }: { children: string }) {
+  return (
+    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+      {children}
+    </h3>
   );
 }
 
@@ -64,26 +86,61 @@ export default async function SolicitudDetailPage({
             </div>
             <CardDescription>Información de la solicitud tal como fue importada.</CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <Field label="Código máquina" value={request.codigo} />
-              <Field label="Máquina" value={request.maquina} />
-              <Field label="Pieza" value={request.pieza} />
-              <Field
-                label="Fecha"
-                value={request.fecha ? dateFormatter.format(request.fecha) : null}
-              />
-              <Field label="Código empleado" value={request.codemple} />
-              <Field label="Empleado" value={request.empleado} />
-              <Field label="Problema" value={request.problema} />
-              <Field label="Tarea" value={request.tarea} />
+          <CardContent className="flex flex-col gap-6">
+            <div>
+              <SectionLabel>Identificación</SectionLabel>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <Field label="PARTE" value={request.parte} />
+                <Field label="Máquina" value={request.maquina} />
+                <Field label="Código de máquina" value={request.codigo} />
+              </div>
+            </div>
+
+            <div>
+              <SectionLabel>Solicitud</SectionLabel>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <Field
+                  label="Fecha de solicitud"
+                  value={request.fecha ? dateFormatter.format(request.fecha) : null}
+                />
+                <Field label="Empleado solicitante" value={request.empleado} />
+                <Field label="Código de empleado" value={request.codemple} />
+              </div>
+            </div>
+
+            <div>
+              <SectionLabel>Detalle del problema</SectionLabel>
+              <div className="grid grid-cols-1 gap-4">
+                <Field label="Pieza afectada" value={request.pieza} />
+                <TextBlock label="Problema" value={request.problema} />
+                <TextBlock label="Tarea" value={request.tarea} />
+              </div>
             </div>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base text-foreground">Historial de minutas</CardTitle>
+            <CardTitle className="flex items-center gap-2 text-base text-foreground">
+              <UserRound className="size-4 text-muted-foreground" />
+              Técnico asignado
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* No existe todavía una relación Técnico <-> Solicitud en el
+                modelo de datos (Technician solo se vincula a MaintenanceOrder).
+                Se muestra honestamente el estado sin asignación, sin inventar
+                un técnico ni una relación que no existe. */}
+            <p className="text-sm text-muted-foreground">
+              Sin técnico asignado. La asignación de técnicos a Solicitudes se implementará en una
+              fase posterior.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base text-foreground">Seguimiento de mantenimiento</CardTitle>
             <CardDescription>
               {request.logs.length} minuta{request.logs.length === 1 ? "" : "s"} relacionada
               {request.logs.length === 1 ? "" : "s"}, en orden cronológico.

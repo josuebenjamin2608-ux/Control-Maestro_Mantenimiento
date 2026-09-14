@@ -5,7 +5,6 @@ import { AppShell } from "@/components/layout/app-shell";
 import { RecentActivityPanel } from "@/components/layout/recent-activity-panel";
 import { RouteTabs } from "@/components/layout/route-tabs";
 import { EstadoBreakdownCard } from "@/components/dashboard/estado-breakdown-card";
-import { MinutasSummaryCard } from "@/components/dashboard/minutas-summary-card";
 import { RangeSelect, type RangeOption } from "@/components/dashboard/range-select";
 import { SolicitudesTable } from "@/components/solicitudes/solicitudes-table";
 import { Card, CardContent } from "@/components/ui/card";
@@ -240,8 +239,8 @@ export default async function DashboardPage({
           ) : null}
         </div>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
-          <div className="flex flex-col gap-3 lg:col-span-3">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
+          <div className="flex flex-col gap-3 lg:col-span-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h3 className="text-sm font-medium text-foreground">{sectionTitle}</h3>
@@ -268,14 +267,13 @@ export default async function DashboardPage({
             </div>
             <Card>
               <CardContent className="px-0">
-                <SolicitudesTable items={operationalRequests} />
+                <SolicitudesTable items={operationalRequests} compact />
               </CardContent>
             </Card>
           </div>
 
           <div className="flex flex-col gap-6">
             <EstadoBreakdownCard stats={stats} />
-            <MinutasSummaryCard />
             <RecentActivityPanel />
           </div>
         </div>
