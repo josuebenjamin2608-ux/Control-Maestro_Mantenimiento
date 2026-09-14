@@ -359,6 +359,14 @@ model MaintenanceRequest {
 /// modela como tabla intermedia propia, en vez de un `@relation` implícito,
 /// para poder registrar cuándo se hizo cada asignación sin agregar campos
 /// artificiales a MaintenanceRequest ni a Technician.
+///
+/// Cada fila ES el registro de trazabilidad de asignación/retiro que se
+/// necesita (quién, a qué solicitud, cuándo asignado, cuándo retirado) —
+/// por eso "retirar" un técnico completa `removedAt` en vez de borrar la
+/// fila. Esto NO es una auditoría general de cambios del técnico: los
+/// datos propios de Technician (nombre, cargo, activo) se editan sin dejar
+/// rastro aquí; si cambian después de una asignación, las filas ya creadas
+/// conservan la relación que existió, sin reescribirse retroactivamente.
 model MaintenanceRequestTechnician {
   id String @id @default(cuid())
 
@@ -368,9 +376,12 @@ model MaintenanceRequestTechnician {
   technicianId String
   technician   Technician @relation(fields: [technicianId], references: [id], onDelete: Cascade)
 
-  assignedAt DateTime @default(now())
+  assignedAt DateTime  @default(now())
+  /// null mientras la asignación sigue activa; se completa al retirar al
+  /// técnico de la solicitud (ver unassignTechnicianFromRequest).
+  removedAt  DateTime?
 
-  @@unique([maintenanceRequestId, technicianId])
+  @@index([maintenanceRequestId, technicianId])
   @@index([technicianId])
   @@map("maintenance_request_technicians")
 }

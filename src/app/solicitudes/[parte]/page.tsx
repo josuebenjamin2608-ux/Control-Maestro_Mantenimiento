@@ -149,7 +149,7 @@ export default async function SolicitudDetailPage({
           <CardContent>
             <TechnicianAssignment
               maintenanceRequestId={request.id}
-              assignedTechnicians={request.assignedTechnicians.map((row) => row.technician)}
+              assignments={request.assignedTechnicians}
               allTechnicians={technicians}
             />
           </CardContent>
