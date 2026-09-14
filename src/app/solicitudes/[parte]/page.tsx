@@ -6,6 +6,7 @@ import { AppShell } from "@/components/layout/app-shell";
 import { HistoricalBadge } from "@/components/imports/outcome-badge";
 import { EstadoBadge } from "@/components/solicitudes/estado-badge";
 import { MinutaTimeline } from "@/components/solicitudes/minuta-timeline";
+import { TechnicianAssignment } from "@/components/solicitudes/technician-assignment";
 import {
   Card,
   CardContent,
@@ -13,13 +14,24 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { getMaintenanceRequestByParte } from "@/server/services/maintenance-requests.service";
+import {
+  getMaintenanceRequestByParte,
+  listTechnicians,
+} from "@/server/services/maintenance-requests.service";
+import { sanitizeInternalPath } from "@/lib/safe-url";
 
 // Consulta la base de datos: debe resolverse en cada request, no se puede
 // pre-renderizar en build.
 export const dynamic = "force-dynamic";
 
 const dateFormatter = new Intl.DateTimeFormat("es", { dateStyle: "medium" });
+
+/** Etiqueta contextual según el origen real (?back=...), nunca window.history. */
+function backLinkLabel(back: string | null): string {
+  if (!back || back.startsWith("/solicitudes")) return "Volver a Solicitudes";
+  if (back === "/" || back.startsWith("/?")) return "Volver al Panel de control";
+  return "Volver";
+}
 
 function Field({ label, value }: { label: string; value: string | null | undefined }) {
   return (
@@ -56,25 +68,33 @@ function SectionLabel({ children }: { children: string }) {
 
 export default async function SolicitudDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ parte: string }>;
+  searchParams: Promise<{ back?: string }>;
 }) {
   const { parte } = await params;
-  const request = await getMaintenanceRequestByParte(decodeURIComponent(parte));
+  const { back } = await searchParams;
+  const [request, technicians] = await Promise.all([
+    getMaintenanceRequestByParte(decodeURIComponent(parte)),
+    listTechnicians(),
+  ]);
 
   if (!request) {
     notFound();
   }
 
+  const backHref = sanitizeInternalPath(back) ?? "/solicitudes";
+
   return (
     <AppShell title={`Solicitud ${request.parte}`}>
       <div className="mx-auto flex max-w-4xl flex-col gap-6">
         <Link
-          href="/solicitudes"
+          href={backHref}
           className="flex w-fit items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="size-4" />
-          Volver a Solicitudes
+          {backLinkLabel(sanitizeInternalPath(back))}
         </Link>
 
         <Card>
@@ -127,14 +147,11 @@ export default async function SolicitudDetailPage({
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {/* No existe todavía una relación Técnico <-> Solicitud en el
-                modelo de datos (Technician solo se vincula a MaintenanceOrder).
-                Se muestra honestamente el estado sin asignación, sin inventar
-                un técnico ni una relación que no existe. */}
-            <p className="text-sm text-muted-foreground">
-              Sin técnico asignado. La asignación de técnicos a Solicitudes se implementará en una
-              fase posterior.
-            </p>
+            <TechnicianAssignment
+              maintenanceRequestId={request.id}
+              assignedTechnicians={request.assignedTechnicians.map((row) => row.technician)}
+              allTechnicians={technicians}
+            />
           </CardContent>
         </Card>
 

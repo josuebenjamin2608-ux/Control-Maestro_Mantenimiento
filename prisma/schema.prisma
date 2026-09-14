@@ -74,7 +74,8 @@ model Technician {
   userId String? @unique
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
 
-  assignedOrders MaintenanceOrder[]
+  assignedOrders   MaintenanceOrder[]
+  assignedRequests MaintenanceRequestTechnician[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -319,8 +320,9 @@ model MaintenanceHistory {
 
 /// Registro de Solicitudes: fuente principal del flujo. `parte` es el
 /// identificador externo único (columna PARTE del Excel). No se vincula
-/// todavía a Machine/User/Technician: los datos de máquina/empleado se
-/// guardan tal como llegan del archivo (fase posterior de conciliación).
+/// todavía a Machine/User: los datos de máquina/empleado se guardan tal
+/// como llegan del archivo (fase posterior de conciliación). La asignación
+/// de técnicos sí existe ya, vía `MaintenanceRequestTechnician` más abajo.
 model MaintenanceRequest {
   id       String    @id @default(cuid())
   parte    String    @unique
@@ -340,14 +342,37 @@ model MaintenanceRequest {
   /// como "histórico inicial" (nunca se infiere automáticamente).
   isHistorical Boolean @default(false)
 
-  logs          MaintenanceLog[]
-  importResults ImportRequestResult[]
+  logs                MaintenanceLog[]
+  importResults       ImportRequestResult[]
+  assignedTechnicians MaintenanceRequestTechnician[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([fecha])
   @@map("maintenance_requests")
+}
+
+/// Asignación de uno o varios técnicos a una Solicitud — relación N:N
+/// explícita (una MaintenanceRequest puede requerir 0, 1 o varios técnicos,
+/// y un técnico puede tener varias solicitudes asignadas a la vez). Se
+/// modela como tabla intermedia propia, en vez de un `@relation` implícito,
+/// para poder registrar cuándo se hizo cada asignación sin agregar campos
+/// artificiales a MaintenanceRequest ni a Technician.
+model MaintenanceRequestTechnician {
+  id String @id @default(cuid())
+
+  maintenanceRequestId String
+  maintenanceRequest   MaintenanceRequest @relation(fields: [maintenanceRequestId], references: [id], onDelete: Cascade)
+
+  technicianId String
+  technician   Technician @relation(fields: [technicianId], references: [id], onDelete: Cascade)
+
+  assignedAt DateTime @default(now())
+
+  @@unique([maintenanceRequestId, technicianId])
+  @@index([technicianId])
+  @@map("maintenance_request_technicians")
 }
 
 enum MaintenanceLogRelationStatus {

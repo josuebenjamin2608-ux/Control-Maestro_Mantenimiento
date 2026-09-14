@@ -37,6 +37,14 @@ export default async function SolicitudesPage({
     getDistinctEstados(),
   ]);
 
+  const currentParams = new URLSearchParams();
+  if (q) currentParams.set("q", q);
+  if (maquina) currentParams.set("maquina", maquina);
+  if (estado) currentParams.set("estado", estado);
+  if (skip) currentParams.set("skip", String(skip));
+  const currentQs = currentParams.toString();
+  const currentSolicitudesHref = currentQs ? `/solicitudes?${currentQs}` : "/solicitudes";
+
   return (
     <AppShell title="Solicitudes">
       <div className="mx-auto flex max-w-6xl flex-col gap-6">
@@ -59,7 +67,7 @@ export default async function SolicitudesPage({
 
         <Card>
           <CardContent className="px-0">
-            <SolicitudesTable items={items} />
+            <SolicitudesTable items={items} backHref={currentSolicitudesHref} />
             <Pagination
               basePath="/solicitudes"
               searchParams={{ q, maquina, estado }}

@@ -11,9 +11,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { ESTADO_BUCKET_LABELS, type EstadoBucket } from "@/lib/estado";
 import { cn } from "@/lib/utils";
 import {
+  getBucketStatValue,
   getDashboardStats,
   listOperationalMaintenanceRequests,
-  type DashboardStats,
 } from "@/server/services/maintenance-requests.service";
 
 // Esta página consulta la base de datos; no se puede pre-renderizar
@@ -53,14 +53,6 @@ function buildDashboardHref(rangeValue: string, bucketValue?: string) {
   const qs = params.toString();
   return qs ? `/?${qs}` : "/";
 }
-
-const BUCKET_STATS_KEY: Record<EstadoBucket, keyof Omit<DashboardStats, "total">> = {
-  pendiente: "pendientes",
-  espera: "espera",
-  programada: "programadas",
-  atendida: "atendidas",
-  otro: "otros",
-};
 
 const BUCKET_TONE: Record<EstadoBucket, "destructive" | "warning" | "primary" | "success" | "muted"> = {
   pendiente: "destructive",
@@ -130,8 +122,16 @@ export default async function DashboardPage({
       bucket: selectedBucket,
       sinceDays: selectedRange.sinceDays,
       take: selectedBucket ? 15 : 8,
+      // Vista por defecto ("Solicitudes que requieren atención"): nunca
+      // muestra Realizado. El KPI Total (bucket=todas) sí las incluye.
+      excludeAtendida: !bucketParam,
     }),
   ]);
+
+  const currentDashboardHref = buildDashboardHref(
+    selectedRange.value,
+    bucketParam === "todas" ? "todas" : selectedBucket,
+  );
 
   const atendidasRatio = stats.total > 0 ? Math.round((stats.atendidas / stats.total) * 100) : 0;
   const showOtrosKpi = stats.otros > 0;
@@ -146,7 +146,11 @@ export default async function DashboardPage({
           : "Solicitudes que requieren atención";
 
   const activeCount =
-    bucketParam === "todas" ? stats.total : selectedBucket ? stats[BUCKET_STATS_KEY[selectedBucket]] : undefined;
+    bucketParam === "todas"
+      ? stats.total
+      : selectedBucket
+        ? getBucketStatValue(stats, selectedBucket)
+        : undefined;
 
   const sectionSubtitle =
     activeCount !== undefined
@@ -267,7 +271,11 @@ export default async function DashboardPage({
             </div>
             <Card>
               <CardContent className="px-0">
-                <SolicitudesTable items={operationalRequests} compact />
+                <SolicitudesTable
+                  items={operationalRequests}
+                  compact
+                  backHref={currentDashboardHref}
+                />
               </CardContent>
             </Card>
           </div>

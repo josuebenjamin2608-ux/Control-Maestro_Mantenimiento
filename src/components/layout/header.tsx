@@ -1,11 +1,14 @@
-import { Bell, CircleUserRound, ShieldCheck } from "lucide-react";
+import { CircleUserRound, ShieldCheck } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { MobileNav } from "@/components/layout/mobile-nav";
+import { NotificationsBell } from "@/components/layout/notifications-bell";
 import { RefreshButton } from "@/components/layout/refresh-button";
 import { formatRelativeTime } from "@/lib/estado";
-import { getHeaderStatus } from "@/server/services/maintenance-requests.service";
+import {
+  getHeaderStatus,
+  getNotifications,
+} from "@/server/services/maintenance-requests.service";
 
 function EnvironmentBadge() {
   // VERCEL_ENV solo existe en despliegues de Vercel; en local/otros entornos
@@ -27,7 +30,10 @@ function EnvironmentBadge() {
 }
 
 export async function Header({ title }: { title: string }) {
-  const { lastUpdateAt } = await getHeaderStatus();
+  const [{ lastUpdateAt }, notifications] = await Promise.all([
+    getHeaderStatus(),
+    getNotifications(),
+  ]);
 
   return (
     <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border bg-card px-4 sm:px-6">
@@ -46,15 +52,7 @@ export async function Header({ title }: { title: string }) {
 
       <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
         <RefreshButton />
-        <Button
-          variant="ghost"
-          size="icon"
-          className="text-muted-foreground"
-          aria-label="Notificaciones: sin novedades"
-          title="Sin notificaciones nuevas"
-        >
-          <Bell className="size-4" />
-        </Button>
+        <NotificationsBell notifications={notifications} />
         <EnvironmentBadge />
         <span
           className="hidden items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground lg:flex"

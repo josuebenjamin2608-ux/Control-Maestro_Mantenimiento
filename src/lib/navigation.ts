@@ -108,10 +108,10 @@ export const NAV_GROUPS: NavGroup[] = [
       },
       {
         title: "Indicadores",
-        description: "KPIs de mantenimiento",
+        description: "Indicadores calculados a partir de Solicitudes",
         href: "/indicadores",
         icon: BarChart3,
-        available: false,
+        available: true,
       },
     ],
   },

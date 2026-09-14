@@ -1,13 +1,25 @@
 import { db } from "@/lib/db";
 import { classifyEstado, ESTADO_BUCKET_PRIORITY, type EstadoBucket } from "@/lib/estado";
-import type { Prisma } from "@/generated/prisma/client";
+import type { ImportFileType, Prisma } from "@/generated/prisma/client";
 
 export function getMaintenanceRequestByParte(parte: string) {
   return db.maintenanceRequest.findUnique({
     where: { parte },
     include: {
       logs: { orderBy: { fechaini: "asc" } },
+      assignedTechnicians: {
+        include: { technician: true },
+        orderBy: { assignedAt: "asc" },
+      },
     },
+  });
+}
+
+/** Técnicos activos reales, para el selector de asignación. Nunca inventa técnicos. */
+export function listTechnicians() {
+  return db.technician.findMany({
+    where: { isActive: true },
+    orderBy: { fullName: "asc" },
   });
 }
 
@@ -65,6 +77,65 @@ export async function getDistinctMachines(): Promise<string[]> {
     orderBy: { maquina: "asc" },
   });
   return rows.map((row) => row.maquina).filter((value): value is string => Boolean(value));
+}
+
+export interface MachineDistributionItem {
+  maquina: string;
+  count: number;
+}
+
+/** Máquinas con más solicitudes reales (columna MAQUINA), para Indicadores. */
+export async function getMachineDistribution(limit = 8): Promise<MachineDistributionItem[]> {
+  const grouped = await db.maintenanceRequest.groupBy({
+    by: ["maquina"],
+    where: { maquina: { not: null } },
+    _count: { _all: true },
+    orderBy: { _count: { maquina: "desc" } },
+    take: limit,
+  });
+  return grouped
+    .filter((group) => group.maquina)
+    .map((group) => ({ maquina: group.maquina as string, count: group._count._all }));
+}
+
+export interface MonthlyRequestCount {
+  /** "YYYY-MM" */
+  month: string;
+  count: number;
+}
+
+/**
+ * Conteo real de solicitudes por mes según FECHA (la fecha de la solicitud,
+ * no la fecha de importación). Se agrupa en memoria: Prisma no soporta un
+ * GROUP BY truncado por mes de forma portable sin SQL crudo, y el volumen de
+ * filas es manejable para este cálculo puntual de Indicadores.
+ */
+export async function getMonthlyRequestCounts(months = 12): Promise<MonthlyRequestCount[]> {
+  const since = new Date();
+  since.setDate(1);
+  since.setHours(0, 0, 0, 0);
+  since.setMonth(since.getMonth() - (months - 1));
+
+  const rows = await db.maintenanceRequest.findMany({
+    where: { fecha: { gte: since } },
+    select: { fecha: true },
+  });
+
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    if (!row.fecha) continue;
+    const key = `${row.fecha.getFullYear()}-${String(row.fecha.getMonth() + 1).padStart(2, "0")}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+
+  const result: MonthlyRequestCount[] = [];
+  const cursor = new Date(since);
+  for (let i = 0; i < months; i++) {
+    const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
+    result.push({ month: key, count: counts.get(key) ?? 0 });
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+  return result;
 }
 
 /** Valores reales de ESTADO presentes en las solicitudes, para el filtro (texto crudo del Excel). */
@@ -133,6 +204,13 @@ export interface OperationalRequestsParams {
   bucket?: EstadoBucket;
   sinceDays?: number;
   take?: number;
+  /**
+   * Solo aplica cuando no hay `bucket`: excluye "atendida" del listado por
+   * defecto ("Solicitudes que requieren atención" nunca muestra Realizado).
+   * El KPI Total (`bucket` ausente pero solicitado explícitamente como
+   * "todas" por el caller) sigue mostrando todo pasando `false`.
+   */
+  excludeAtendida?: boolean;
 }
 
 /**
@@ -147,7 +225,7 @@ export interface OperationalRequestsParams {
  * de la solicitud (que viene de `fecha`).
  */
 export async function listOperationalMaintenanceRequests(params: OperationalRequestsParams = {}) {
-  const { bucket, sinceDays, take = 8 } = params;
+  const { bucket, sinceDays, take = 8, excludeAtendida = false } = params;
 
   const dateWhere: Prisma.MaintenanceRequestWhereInput | undefined = sinceDays
     ? { fecha: { gte: new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000) } }
@@ -188,13 +266,30 @@ export async function listOperationalMaintenanceRequests(params: OperationalRequ
     return fetchBucket(bucket, take);
   }
 
+  const priority = excludeAtendida
+    ? ESTADO_BUCKET_PRIORITY.filter((b) => b !== "atendida")
+    : ESTADO_BUCKET_PRIORITY;
+
   const results: Awaited<ReturnType<typeof fetchBucket>> = [];
-  for (const priorityBucket of ESTADO_BUCKET_PRIORITY) {
+  for (const priorityBucket of priority) {
     if (results.length >= take) break;
     const rows = await fetchBucket(priorityBucket, take - results.length);
     results.push(...rows);
   }
   return results;
+}
+
+const BUCKET_STATS_KEY: Record<EstadoBucket, keyof Omit<DashboardStats, "total">> = {
+  pendiente: "pendientes",
+  espera: "espera",
+  programada: "programadas",
+  atendida: "atendidas",
+  otro: "otros",
+};
+
+/** Único punto de acceso bucket -> valor de DashboardStats (dashboard e Indicadores comparten esto). */
+export function getBucketStatValue(stats: DashboardStats, bucket: EstadoBucket): number {
+  return stats[BUCKET_STATS_KEY[bucket]];
 }
 
 export function listImportBatches(take = 20) {
@@ -203,6 +298,102 @@ export function listImportBatches(take = 20) {
     take,
     include: { importedBy: { select: { name: true } } },
   });
+}
+
+export interface NotificationItem {
+  id: string;
+  type: "import" | "import_error" | "technician_assigned";
+  message: string;
+  detail?: string;
+  createdAt: Date;
+  href: string;
+}
+
+const IMPORT_FILE_NOUN: Record<ImportFileType, string> = {
+  MAINTENANCE_REQUEST: "solicitudes",
+  MAINTENANCE_LOG: "minutas",
+};
+
+/**
+ * Notificaciones reales derivadas de ImportBatch/ImportRequestResult y de
+ * MaintenanceRequestTechnician — no existe una tabla de notificaciones
+ * propia, así que nunca se puede "inventar" una. El histórico inicial
+ * (isHistorical = true) queda excluido explícitamente para no generar una
+ * avalancha de notificaciones de "nuevas solicitudes" por datos que ya
+ * existían antes de usar el sistema.
+ */
+export async function getNotifications(limit = 20): Promise<NotificationItem[]> {
+  const [batches, assignments] = await Promise.all([
+    db.importBatch.findMany({
+      where: { isHistorical: false },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    }),
+    db.maintenanceRequestTechnician.findMany({
+      orderBy: { assignedAt: "desc" },
+      take: limit,
+      include: {
+        technician: { select: { fullName: true } },
+        maintenanceRequest: { select: { parte: true } },
+      },
+    }),
+  ]);
+
+  const items: NotificationItem[] = [];
+
+  for (const batch of batches) {
+    const noun = IMPORT_FILE_NOUN[batch.fileType];
+
+    if (batch.errorCount > 0) {
+      items.push({
+        id: `batch-error-${batch.id}`,
+        type: "import_error",
+        message: `La importación de ${noun} tuvo ${batch.errorCount} error${batch.errorCount === 1 ? "" : "es"}`,
+        detail: batch.fileName,
+        createdAt: batch.createdAt,
+        href: "/importaciones",
+      });
+    }
+
+    if (batch.fileType === "MAINTENANCE_REQUEST") {
+      const parts: string[] = [];
+      if (batch.newCount) parts.push(`${batch.newCount} nueva${batch.newCount === 1 ? "" : "s"}`);
+      if (batch.modifiedCount)
+        parts.push(`${batch.modifiedCount} actualizada${batch.modifiedCount === 1 ? "" : "s"}`);
+      if (parts.length > 0) {
+        items.push({
+          id: `batch-${batch.id}`,
+          type: "import",
+          message: `Se importaron solicitudes: ${parts.join(", ")}`,
+          detail: batch.fileName,
+          createdAt: batch.createdAt,
+          href: "/solicitudes",
+        });
+      }
+    } else if (batch.newCount) {
+      items.push({
+        id: `batch-${batch.id}`,
+        type: "import",
+        message: `Se importaron ${batch.newCount} minuta${batch.newCount === 1 ? "" : "s"} nueva${batch.newCount === 1 ? "" : "s"}`,
+        detail: batch.fileName,
+        createdAt: batch.createdAt,
+        href: "/minutas",
+      });
+    }
+  }
+
+  for (const assignment of assignments) {
+    items.push({
+      id: `assignment-${assignment.id}`,
+      type: "technician_assigned",
+      message: `Se asignó a ${assignment.technician.fullName} en la solicitud ${assignment.maintenanceRequest.parte}`,
+      createdAt: assignment.assignedAt,
+      href: `/solicitudes/${encodeURIComponent(assignment.maintenanceRequest.parte)}`,
+    });
+  }
+
+  items.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  return items.slice(0, limit);
 }
 
 /** Últimas novedades para el dashboard: la carga más reciente de cada tipo. */
