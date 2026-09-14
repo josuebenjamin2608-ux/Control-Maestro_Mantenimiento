@@ -85,7 +85,7 @@ export const NAV_GROUPS: NavGroup[] = [
         description: "Equipo de mantenimiento",
         href: "/tecnicos",
         icon: Users,
-        available: false,
+        available: true,
       },
       {
         title: "Inventario y repuestos",

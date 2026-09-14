@@ -3,8 +3,25 @@
 import { revalidatePath } from "next/cache";
 
 import { db } from "@/lib/db";
+import { technicianInputSchema, type TechnicianInput } from "@/lib/validations/technicians";
+import { Prisma } from "@/generated/prisma/client";
 
 export type ActionResult<T> = { ok: true; data: T } | { ok: false; error: string };
+
+/**
+ * `employeeCode` es NOT NULL + UNIQUE en el schema, pero ya no se pide como
+ * dato de entrada (ver decisión del módulo de Técnicos): se genera acá como
+ * identificador técnico interno, nunca mostrado como campo principal.
+ */
+function generateEmployeeCode(): string {
+  const timePart = Date.now().toString(36).toUpperCase();
+  const randomPart = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `EMP-${timePart}${randomPart}`;
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+}
 
 /**
  * Asigna un técnico real (existente en la tabla Technician) a una Solicitud.
@@ -72,5 +89,94 @@ export async function unassignTechnicianFromRequest(
   });
 
   revalidatePath(`/solicitudes/${encodeURIComponent(request.parte)}`);
+  return { ok: true, data: null };
+}
+
+/**
+ * Crea un técnico nuevo. Solo pide los datos propios del catálogo (nombre,
+ * cargo/especialidad, activo); `employeeCode` se genera internamente.
+ * Rechaza duplicados obvios: mismo nombre + mismo cargo (insensible a
+ * mayúsculas/espacios), sin importar si el existente está activo o no —
+ * evita catálogos con la misma persona cargada dos veces por error.
+ */
+export async function createTechnician(input: TechnicianInput): Promise<ActionResult<{ id: string }>> {
+  const parsed = technicianInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos." };
+  }
+  const { fullName, specialty, isActive } = parsed.data;
+
+  const duplicate = await db.technician.findFirst({
+    where: {
+      fullName: { equals: fullName, mode: "insensitive" },
+      specialty: { equals: specialty, mode: "insensitive" },
+    },
+    select: { id: true },
+  });
+  if (duplicate) {
+    return { ok: false, error: "Ya existe un técnico con este nombre y cargo/especialidad." };
+  }
+
+  try {
+    const technician = await db.technician.create({
+      data: { fullName, specialty, isActive, employeeCode: generateEmployeeCode() },
+      select: { id: true },
+    });
+    revalidatePath("/tecnicos");
+    return { ok: true, data: technician };
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      return { ok: false, error: "No se pudo generar un identificador único. Intenta de nuevo." };
+    }
+    return { ok: false, error: "No se pudo crear el técnico." };
+  }
+}
+
+/** Edita nombre, cargo/especialidad y estado de un técnico existente. */
+export async function updateTechnician(
+  id: string,
+  input: TechnicianInput,
+): Promise<ActionResult<null>> {
+  const parsed = technicianInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos." };
+  }
+  const { fullName, specialty, isActive } = parsed.data;
+
+  const existing = await db.technician.findUnique({ where: { id }, select: { id: true } });
+  if (!existing) {
+    return { ok: false, error: "El técnico no existe." };
+  }
+
+  const duplicate = await db.technician.findFirst({
+    where: {
+      id: { not: id },
+      fullName: { equals: fullName, mode: "insensitive" },
+      specialty: { equals: specialty, mode: "insensitive" },
+    },
+    select: { id: true },
+  });
+  if (duplicate) {
+    return { ok: false, error: "Ya existe otro técnico con este nombre y cargo/especialidad." };
+  }
+
+  await db.technician.update({ where: { id }, data: { fullName, specialty, isActive } });
+  revalidatePath("/tecnicos");
+  return { ok: true, data: null };
+}
+
+/**
+ * Activa/desactiva un técnico. Nunca lo elimina físicamente — conserva
+ * todos sus datos y su historial de asignaciones (MaintenanceRequestTechnician
+ * no se toca).
+ */
+export async function setTechnicianActive(id: string, isActive: boolean): Promise<ActionResult<null>> {
+  const existing = await db.technician.findUnique({ where: { id }, select: { id: true } });
+  if (!existing) {
+    return { ok: false, error: "El técnico no existe." };
+  }
+
+  await db.technician.update({ where: { id }, data: { isActive } });
+  revalidatePath("/tecnicos");
   return { ok: true, data: null };
 }

@@ -103,7 +103,11 @@ export function TechnicianAssignment({
                 <button
                   type="button"
                   aria-label={`Quitar a ${row.technician.fullName}`}
-                  onClick={() => toggle(row.technicianId, true)}
+                  onClick={() => {
+                    if (window.confirm(`¿Retirar a ${row.technician.fullName} de esta solicitud?`)) {
+                      toggle(row.technicianId, true);
+                    }
+                  }}
                   disabled={isPending && pendingId === row.technicianId}
                   className="rounded-full p-0.5 hover:bg-secondary-foreground/10 disabled:opacity-50"
                 >
