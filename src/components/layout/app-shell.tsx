@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { Header } from "@/components/layout/header";
 import { Sidebar } from "@/components/layout/sidebar";
 
-export function AppShell({
+export async function AppShell({
   title,
   children,
 }: {

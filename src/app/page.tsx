@@ -1,144 +1,145 @@
 import Link from "next/link";
-import { CheckCircle2, FileText, UploadCloud } from "lucide-react";
-
-// Esta página consulta la base de datos (novedades de importación); no se
-// puede pre-renderizar estáticamente en build (no hay DB disponible en ese
-// paso), debe resolverse en cada request.
-export const dynamic = "force-dynamic";
+import { ArrowRight } from "lucide-react";
 
 import { AppShell } from "@/components/layout/app-shell";
-import { Badge } from "@/components/ui/badge";
+import { RecentActivityPanel } from "@/components/layout/recent-activity-panel";
+import { RouteTabs } from "@/components/layout/route-tabs";
+import { VentoPanel } from "@/components/layout/vento-panel";
+import { RangeSelect, type RangeOption } from "@/components/dashboard/range-select";
+import { SolicitudesTable } from "@/components/solicitudes/solicitudes-table";
+import { Card, CardContent } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { NAV_ITEMS } from "@/lib/navigation";
-import { getLatestNovedades } from "@/server/services/maintenance-requests.service";
+  getDashboardStats,
+  listMaintenanceRequests,
+} from "@/server/services/maintenance-requests.service";
 
-function NovedadStat({ label, value }: { label: string; value: number }) {
+// Esta página consulta la base de datos; no se puede pre-renderizar
+// estáticamente en build (no hay DB disponible en ese paso), debe
+// resolverse en cada request.
+export const dynamic = "force-dynamic";
+
+const TABS = [
+  { label: "Solicitudes", href: "/solicitudes", available: true },
+  { label: "Minutas", href: "/minutas", available: true },
+  { label: "Órdenes de trabajo", href: "/ordenes", available: false },
+  { label: "Mantenimiento preventivo", href: "/preventivo", available: false },
+];
+
+const RANGE_OPTIONS: (RangeOption & { sinceDays?: number })[] = [
+  { label: "Todos los tiempos", value: "all" },
+  { label: "Últimos 7 días", value: "7", sinceDays: 7 },
+  { label: "Últimos 30 días", value: "30", sinceDays: 30 },
+  { label: "Últimos 90 días", value: "90", sinceDays: 90 },
+];
+
+function KpiCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: "destructive" | "warning" | "primary" | "success";
+}) {
   return (
-    <div className="flex flex-col gap-0.5 rounded-md border border-border bg-secondary/40 px-3 py-2">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="text-lg font-semibold text-foreground">{value}</span>
-    </div>
+    <Card>
+      <CardContent className="flex flex-col gap-1 py-5">
+        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          {label}
+        </span>
+        <span
+          className={cn(
+            "text-2xl font-semibold",
+            tone === "destructive" && "text-destructive",
+            tone === "warning" && "text-warning",
+            tone === "primary" && "text-primary",
+            tone === "success" && "text-success",
+          )}
+        >
+          {value}
+        </span>
+      </CardContent>
+    </Card>
   );
 }
 
-export default async function DashboardPage() {
-  const modulesEnPreparacion = NAV_ITEMS.filter((item) => item.href !== "/" && !item.available);
-  const { latestRequestBatch, latestLogBatch } = await getLatestNovedades();
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ range?: string }>;
+}) {
+  const { range } = await searchParams;
+  const selectedRange = RANGE_OPTIONS.find((option) => option.value === range) ?? RANGE_OPTIONS[0];
+
+  const [stats, { items: recentRequests }] = await Promise.all([
+    getDashboardStats(selectedRange.sinceDays),
+    listMaintenanceRequests({ take: 5 }),
+  ]);
+
+  const atendidasRatio = stats.total > 0 ? Math.round((stats.atendidas / stats.total) * 100) : 0;
 
   return (
     <AppShell title="Panel de control">
-      <div className="mx-auto flex max-w-6xl flex-col gap-6">
-        <div className="flex flex-col gap-1">
-          <h2 className="text-xl font-semibold text-foreground">
-            Control Maestro Mantenimiento
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            Motor de importación de Solicitudes y Minutas activo. El resto de los
-            módulos de gestión se habilitarán progresivamente.
-          </p>
+      <div className="mx-auto flex max-w-7xl flex-col gap-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-col gap-1">
+            <h2 className="text-xl font-semibold text-foreground">
+              Control Maestro Mantenimiento
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Vista general de Solicitudes y Minutas importadas.
+            </p>
+          </div>
+
+          <RangeSelect options={RANGE_OPTIONS} value={selectedRange.value} />
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-foreground">
-              <CheckCircle2 className="size-4 text-success" />
-              Estado de la fase actual
-            </CardTitle>
-            <CardDescription>
-              Next.js, Tailwind CSS, shadcn/ui, el esquema base de Prisma y el motor
-              de importación de Solicitudes/Minutas (Fase 2) quedaron configurados.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
-            <Link
-              href="/importaciones"
-              className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
-            >
-              <UploadCloud className="size-4" />
-              Importar un archivo
-            </Link>
-            <span className="text-muted-foreground">·</span>
-            <Link
-              href="/solicitudes"
-              className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
-            >
-              <FileText className="size-4" />
-              Ver solicitudes
-            </Link>
-          </CardContent>
-        </Card>
+        <RouteTabs tabs={TABS} />
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-foreground">Novedades</CardTitle>
-            <CardDescription>Resultado de la última importación de cada tipo.</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            <div>
-              <h4 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Solicitudes
-              </h4>
-              {latestRequestBatch ? (
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  <NovedadStat label="Nuevas" value={latestRequestBatch.newCount ?? 0} />
-                  <NovedadStat label="Modificadas" value={latestRequestBatch.modifiedCount ?? 0} />
-                  <NovedadStat label="Sin cambios" value={latestRequestBatch.unchangedCount ?? 0} />
-                  <NovedadStat label="Errores" value={latestRequestBatch.errorCount} />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="sm:col-span-2 lg:col-span-1">
+            <Card className="h-full">
+              <CardContent className="flex h-full flex-col justify-center gap-2 py-5">
+                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Total de solicitudes
+                </span>
+                <span className="text-3xl font-semibold text-foreground">{stats.total}</span>
+                <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
+                  <div className="h-full bg-success" style={{ width: `${atendidasRatio}%` }} />
                 </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">Todavía no se ha importado ningún archivo.</p>
-              )}
-            </div>
-            <div>
-              <h4 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Minutas
-              </h4>
-              {latestLogBatch ? (
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  <NovedadStat label="Nuevas" value={latestLogBatch.newCount ?? 0} />
-                  <NovedadStat label="Sin relación" value={latestLogBatch.pendingCount ?? 0} />
-                  <NovedadStat label="Ya existían" value={latestLogBatch.alreadyExistsCount ?? 0} />
-                  <NovedadStat label="Errores" value={latestLogBatch.errorCount} />
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">Todavía no se ha importado ningún archivo.</p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+                <span className="text-xs text-muted-foreground">{atendidasRatio}% atendidas</span>
+              </CardContent>
+            </Card>
+          </div>
+          <KpiCard label="Pendientes" value={stats.pendientes} tone="destructive" />
+          <KpiCard label="En espera" value={stats.espera} tone="warning" />
+          <KpiCard label="Programadas / en ejecución" value={stats.programadas} tone="primary" />
+          <KpiCard label="Atendidas" value={stats.atendidas} tone="success" />
+        </div>
 
-        <div>
-          <h3 className="mb-3 text-sm font-medium text-muted-foreground">
-            Módulos previstos
-          </h3>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {modulesEnPreparacion.map((item) => {
-              const Icon = item.icon;
-              return (
-                <Card key={item.href}>
-                  <CardHeader>
-                    <div className="flex items-start justify-between gap-2">
-                      <span className="flex size-9 items-center justify-center rounded-md bg-secondary text-secondary-foreground">
-                        <Icon className="size-4.5" />
-                      </span>
-                      <Badge variant="outline" className="text-muted-foreground">
-                        Próximamente
-                      </Badge>
-                    </div>
-                    <CardTitle className="pt-2 text-base font-semibold text-foreground">
-                      {item.title}
-                    </CardTitle>
-                    <CardDescription>{item.description}</CardDescription>
-                  </CardHeader>
-                </Card>
-              );
-            })}
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          <div className="flex flex-col gap-3 lg:col-span-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-medium text-foreground">Últimas solicitudes</h3>
+              <Link
+                href="/solicitudes"
+                className="flex items-center gap-1 text-sm text-primary hover:underline"
+              >
+                Ver todas
+                <ArrowRight className="size-3.5" />
+              </Link>
+            </div>
+            <Card>
+              <CardContent className="px-0">
+                <SolicitudesTable items={recentRequests} compact />
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="flex flex-col gap-6">
+            <VentoPanel />
+            <RecentActivityPanel />
           </div>
         </div>
       </div>

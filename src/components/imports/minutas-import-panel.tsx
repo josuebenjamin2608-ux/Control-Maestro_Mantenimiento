@@ -4,7 +4,6 @@ import { useState, useTransition, type ChangeEvent } from "react";
 import { AlertCircle, CheckCircle2, UploadCloud } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -14,6 +13,7 @@ import {
   type MaintenanceLogPreviewPayload,
 } from "@/server/actions/imports";
 import { HistoricalBadge, OutcomeBadge } from "./outcome-badge";
+import { SummaryStat } from "./summary-stat";
 
 type Stage = "idle" | "loading" | "preview" | "confirming" | "done";
 
@@ -134,22 +134,34 @@ export function MinutasImportPanel() {
 
         {preview && stage !== "done" ? (
           <div className="flex flex-col gap-4">
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="font-medium text-foreground">{preview.fileName}</span>
-              <HistoricalBadge isHistorical={isHistorical} />
-              <Badge variant="success">{preview.summary.newCount} nuevas</Badge>
-              <Badge variant="secondary">{preview.summary.alreadyExistsCount} ya existían</Badge>
-              {isHistorical ? null : (
-                <>
-                  <Badge variant="success">{preview.summary.relatedCount} relacionadas</Badge>
-                  <Badge variant="warning">
-                    {preview.summary.pendingCount} pendientes de relación
-                  </Badge>
-                </>
-              )}
-              {preview.summary.errorCount > 0 ? (
-                <Badge variant="destructive">{preview.summary.errorCount} errores</Badge>
-              ) : null}
+            <div className="flex flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium text-foreground">{preview.fileName}</span>
+                <HistoricalBadge isHistorical={isHistorical} />
+              </div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <SummaryStat label="Nuevas" value={preview.summary.newCount} tone="success" />
+                <SummaryStat label="Ya existían" value={preview.summary.alreadyExistsCount} />
+                {isHistorical ? null : (
+                  <>
+                    <SummaryStat
+                      label="Relacionadas"
+                      value={preview.summary.relatedCount}
+                      tone="success"
+                    />
+                    <SummaryStat
+                      label="Pendientes de relación"
+                      value={preview.summary.pendingCount}
+                      tone="warning"
+                    />
+                  </>
+                )}
+                <SummaryStat
+                  label="Errores"
+                  value={preview.summary.errorCount}
+                  tone={preview.summary.errorCount > 0 ? "destructive" : "default"}
+                />
+              </div>
             </div>
 
             <div className="max-h-96 overflow-y-auto rounded-md border border-border">

@@ -3,7 +3,9 @@ import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
 import { AppShell } from "@/components/layout/app-shell";
-import { HistoricalBadge, OutcomeBadge } from "@/components/imports/outcome-badge";
+import { HistoricalBadge } from "@/components/imports/outcome-badge";
+import { EstadoBadge } from "@/components/solicitudes/estado-badge";
+import { MinutaTimeline } from "@/components/solicitudes/minuta-timeline";
 import {
   Card,
   CardContent,
@@ -11,14 +13,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { getMaintenanceRequestByParte } from "@/server/services/maintenance-requests.service";
 
 // Consulta la base de datos: debe resolverse en cada request, no se puede
@@ -63,9 +57,10 @@ export default async function SolicitudDetailPage({
 
         <Card>
           <CardHeader>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <CardTitle className="text-lg text-foreground">PARTE {request.parte}</CardTitle>
               <HistoricalBadge isHistorical={request.isHistorical} />
+              <EstadoBadge estado={request.estado} />
             </div>
             <CardDescription>Información de la solicitud tal como fue importada.</CardDescription>
           </CardHeader>
@@ -74,7 +69,6 @@ export default async function SolicitudDetailPage({
               <Field label="Código máquina" value={request.codigo} />
               <Field label="Máquina" value={request.maquina} />
               <Field label="Pieza" value={request.pieza} />
-              <Field label="Estado" value={request.estado} />
               <Field
                 label="Fecha"
                 value={request.fecha ? dateFormatter.format(request.fecha) : null}
@@ -96,60 +90,7 @@ export default async function SolicitudDetailPage({
             </CardDescription>
           </CardHeader>
           <CardContent className="px-0">
-            {request.logs.length === 0 ? (
-              <p className="px-5 text-sm text-muted-foreground">
-                Todavía no hay minutas relacionadas con esta solicitud.
-              </p>
-            ) : (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>REGISTRO</TableHead>
-                      <TableHead>Fecha inicio</TableHead>
-                      <TableHead>Técnico</TableHead>
-                      <TableHead>Código técnico</TableHead>
-                      <TableHead>Fecha fin</TableHead>
-                      <TableHead>Hora inicio</TableHead>
-                      <TableHead>Hora fin</TableHead>
-                      <TableHead>Minutos</TableHead>
-                      <TableHead>Operación</TableHead>
-                      <TableHead>Observación</TableHead>
-                      <TableHead>Origen</TableHead>
-                      <TableHead>Relación</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {request.logs.map((log) => (
-                      <TableRow key={log.id}>
-                        <TableCell className="font-medium">{log.registro}</TableCell>
-                        <TableCell className="whitespace-nowrap">
-                          {log.fechaini ? dateFormatter.format(log.fechaini) : "—"}
-                        </TableCell>
-                        <TableCell>{log.empleado ?? "—"}</TableCell>
-                        <TableCell>{log.codemp ?? "—"}</TableCell>
-                        <TableCell className="whitespace-nowrap">
-                          {log.fechafin ? dateFormatter.format(log.fechafin) : "—"}
-                        </TableCell>
-                        <TableCell>{log.horaini ?? "—"}</TableCell>
-                        <TableCell>{log.horafin ?? "—"}</TableCell>
-                        <TableCell>{log.minutos ?? "—"}</TableCell>
-                        <TableCell>{log.operacion ?? "—"}</TableCell>
-                        <TableCell className="max-w-48 truncate" title={log.observaciones ?? undefined}>
-                          {log.observaciones ?? "—"}
-                        </TableCell>
-                        <TableCell>
-                          <HistoricalBadge isHistorical={log.isHistorical} />
-                        </TableCell>
-                        <TableCell>
-                          <OutcomeBadge outcome={log.relationStatus} historical={log.isHistorical} />
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
+            <MinutaTimeline logs={request.logs} />
           </CardContent>
         </Card>
       </div>

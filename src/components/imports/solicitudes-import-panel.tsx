@@ -4,7 +4,6 @@ import { useState, useTransition, type ChangeEvent } from "react";
 import { AlertCircle, CheckCircle2, UploadCloud } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -14,6 +13,7 @@ import {
   type MaintenanceRequestPreviewPayload,
 } from "@/server/actions/imports";
 import { OutcomeBadge } from "./outcome-badge";
+import { SummaryStat } from "./summary-stat";
 
 type Stage = "idle" | "loading" | "preview" | "confirming" | "done";
 
@@ -114,14 +114,22 @@ export function SolicitudesImportPanel() {
 
         {preview && stage !== "done" ? (
           <div className="flex flex-col gap-4">
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="font-medium text-foreground">{preview.fileName}</span>
-              <Badge variant="success">{preview.summary.newCount} nuevas</Badge>
-              <Badge variant="warning">{preview.summary.modifiedCount} modificadas</Badge>
-              <Badge variant="secondary">{preview.summary.unchangedCount} sin cambios</Badge>
-              {preview.summary.errorCount > 0 ? (
-                <Badge variant="destructive">{preview.summary.errorCount} errores</Badge>
-              ) : null}
+            <div className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-foreground">{preview.fileName}</span>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <SummaryStat label="Nuevas" value={preview.summary.newCount} tone="success" />
+                <SummaryStat
+                  label="Modificadas"
+                  value={preview.summary.modifiedCount}
+                  tone="warning"
+                />
+                <SummaryStat label="Sin cambios" value={preview.summary.unchangedCount} />
+                <SummaryStat
+                  label="Errores"
+                  value={preview.summary.errorCount}
+                  tone={preview.summary.errorCount > 0 ? "destructive" : "default"}
+                />
+              </div>
             </div>
 
             <label className="flex items-center gap-2 text-sm text-foreground">

@@ -52,9 +52,12 @@ export function ImportHistoryTable({ batches }: { batches: ImportBatchWithUser[]
                 {dateFormatter.format(batch.createdAt)}
               </TableCell>
               <TableCell>
-                <div className="flex items-center gap-1.5">
+                <div className="flex flex-wrap items-center gap-1.5">
                   {FILE_TYPE_LABELS[batch.fileType]}
                   <HistoricalBadge isHistorical={batch.isHistorical} />
+                  <Badge variant={batch.errorCount > 0 ? "destructive" : "success"}>
+                    {batch.errorCount > 0 ? "Con errores" : "Correcto"}
+                  </Badge>
                 </div>
               </TableCell>
               <TableCell className="max-w-48 truncate" title={batch.fileName}>
