@@ -161,6 +161,32 @@ export async function getHeaderStatus() {
   return { lastUpdateAt: latestBatch?.createdAt ?? null };
 }
 
+export interface MinutasSummary {
+  total: number;
+  related: number;
+  pending: number;
+  /** UNRELATED: incluye tanto minutas históricas como sin PARTE en OBSERVACIONES. */
+  unrelated: number;
+}
+
+/** Conteo real de minutas agrupado por relationStatus, para el dashboard. */
+export async function getMinutasSummary(): Promise<MinutasSummary> {
+  const grouped = await db.maintenanceLog.groupBy({
+    by: ["relationStatus"],
+    _count: { _all: true },
+  });
+
+  const summary: MinutasSummary = { total: 0, related: 0, pending: 0, unrelated: 0 };
+  for (const group of grouped) {
+    const count = group._count._all;
+    summary.total += count;
+    if (group.relationStatus === "RELATED") summary.related += count;
+    else if (group.relationStatus === "PENDING") summary.pending += count;
+    else summary.unrelated += count;
+  }
+  return summary;
+}
+
 export interface ListMaintenanceLogsParams {
   search?: string;
   take?: number;

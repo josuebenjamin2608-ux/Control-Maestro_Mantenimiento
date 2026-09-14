@@ -4,7 +4,8 @@ import { ArrowRight } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { RecentActivityPanel } from "@/components/layout/recent-activity-panel";
 import { RouteTabs } from "@/components/layout/route-tabs";
-import { VentoPanel } from "@/components/layout/vento-panel";
+import { EstadoBreakdownCard } from "@/components/dashboard/estado-breakdown-card";
+import { MinutasSummaryCard } from "@/components/dashboard/minutas-summary-card";
 import { RangeSelect, type RangeOption } from "@/components/dashboard/range-select";
 import { SolicitudesTable } from "@/components/solicitudes/solicitudes-table";
 import { Card, CardContent } from "@/components/ui/card";
@@ -118,8 +119,8 @@ export default async function DashboardPage({
           <KpiCard label="Atendidas" value={stats.atendidas} tone="success" />
         </div>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          <div className="flex flex-col gap-3 lg:col-span-2">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
+          <div className="flex flex-col gap-3 lg:col-span-3">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-medium text-foreground">Últimas solicitudes</h3>
               <Link
@@ -132,13 +133,14 @@ export default async function DashboardPage({
             </div>
             <Card>
               <CardContent className="px-0">
-                <SolicitudesTable items={recentRequests} compact />
+                <SolicitudesTable items={recentRequests} />
               </CardContent>
             </Card>
           </div>
 
           <div className="flex flex-col gap-6">
-            <VentoPanel />
+            <EstadoBreakdownCard stats={stats} />
+            <MinutasSummaryCard />
             <RecentActivityPanel />
           </div>
         </div>
