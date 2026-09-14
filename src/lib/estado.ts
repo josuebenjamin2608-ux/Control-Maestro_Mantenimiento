@@ -17,14 +17,60 @@ function stripDiacritics(value: string): string {
   return value.normalize("NFD").replace(/\p{Diacritic}/gu, "");
 }
 
+/** Minúsculas, sin acentos, sin espacios repetidos — robusto ante variaciones de formato. */
+function normalizeEstado(value: string): string {
+  return stripDiacritics(value.trim().toLowerCase()).replace(/\s+/g, " ");
+}
+
+/**
+ * Clasificación centralizada ESTADO -> bucket. Son los únicos valores reales
+ * conocidos del vocabulario de mantenimiento (ver especificación del
+ * dashboard); cualquier otro valor real cae en "otro" — nunca se inventan
+ * estados nuevos ni se usa "otro" como cajón de sastre para estos 5.
+ */
+const ESTADO_BUCKET_MAP: Record<string, EstadoBucket> = {
+  solicitado: "pendiente",
+  "en espera": "espera",
+  programado: "programada",
+  "en ejecucion": "programada",
+  realizado: "atendida",
+};
+
+export const ESTADO_BUCKET_LABELS: Record<EstadoBucket, string> = {
+  pendiente: "Pendientes",
+  espera: "En espera",
+  programada: "Programadas / en ejecución",
+  atendida: "Atendidas",
+  otro: "Otros",
+};
+
+const ESTADO_BUCKET_VARIANTS: Record<EstadoBucket, BadgeVariant> = {
+  pendiente: "destructive",
+  espera: "warning",
+  programada: "default",
+  atendida: "success",
+  otro: "outline",
+};
+
+/** Orden en el que deben priorizarse los buckets cuando no hay un filtro específico: no resueltas primero. */
+export const ESTADO_BUCKET_PRIORITY: EstadoBucket[] = [
+  "pendiente",
+  "espera",
+  "programada",
+  "otro",
+  "atendida",
+];
+
 /**
  * ESTADO es texto libre proveniente del Excel importado — el sistema no
  * define un enum propio para este campo (ver prisma/schema.prisma). Esta
- * función solo clasifica ese texto REAL en un color/categoría visual
- * mediante palabras clave conocidas del vocabulario de mantenimiento; nunca
+ * función clasifica ese texto REAL en un bucket/color visual mediante una
+ * comparación exacta (normalizada) contra el vocabulario conocido; nunca
  * inventa ni reemplaza el valor original (`label` siempre es el texto tal
- * cual vino del archivo). Un texto que no coincide con ningún patrón cae en
- * "otro", mostrado tal cual con estilo neutro.
+ * cual vino del archivo). Un texto que no coincide exactamente con ninguno
+ * de los 5 valores conocidos cae en "otro", mostrado tal cual con estilo
+ * neutro. Es la fuente única de verdad: tanto los conteos de KPI como los
+ * filtros de la tabla de Solicitudes usan esta misma función.
  */
 export function classifyEstado(estado: string | null | undefined): EstadoClassification {
   const raw = estado?.trim();
@@ -32,21 +78,8 @@ export function classifyEstado(estado: string | null | undefined): EstadoClassif
     return { bucket: "otro", label: "Sin estado", variant: "outline" };
   }
 
-  const normalized = stripDiacritics(raw.toLowerCase());
-
-  if (/atendid|realizad|complet|cerrad|finaliz/.test(normalized)) {
-    return { bucket: "atendida", label: raw, variant: "success" };
-  }
-  if (/espera/.test(normalized)) {
-    return { bucket: "espera", label: raw, variant: "warning" };
-  }
-  if (/programa|ejecucion|en proceso|en progreso/.test(normalized)) {
-    return { bucket: "programada", label: raw, variant: "default" };
-  }
-  if (/pendient/.test(normalized)) {
-    return { bucket: "pendiente", label: raw, variant: "destructive" };
-  }
-  return { bucket: "otro", label: raw, variant: "outline" };
+  const bucket = ESTADO_BUCKET_MAP[normalizeEstado(raw)] ?? "otro";
+  return { bucket, label: raw, variant: ESTADO_BUCKET_VARIANTS[bucket] };
 }
 
 /** Días transcurridos desde `date` hasta ahora (0 si es hoy). */

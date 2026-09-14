@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { classifyEstado } from "@/lib/estado";
+import { classifyEstado, ESTADO_BUCKET_PRIORITY, type EstadoBucket } from "@/lib/estado";
 import type { Prisma } from "@/generated/prisma/client";
 
 export function getMaintenanceRequestByParte(parte: string) {
@@ -126,6 +126,75 @@ export async function getDashboardStats(sinceDays?: number): Promise<DashboardSt
   }
 
   return stats;
+}
+
+export interface OperationalRequestsParams {
+  /** Si se omite, se prioriza el orden de ESTADO_BUCKET_PRIORITY (no resueltas primero). */
+  bucket?: EstadoBucket;
+  sinceDays?: number;
+  take?: number;
+}
+
+/**
+ * Listado operativo para el dashboard: usa `classifyEstado` (la misma
+ * clasificación que `getDashboardStats`) para agrupar por bucket, así los
+ * contadores de los KPI y las filas que muestra el filtro nunca divergen.
+ *
+ * Sin `bucket`, recorre ESTADO_BUCKET_PRIORITY (pendiente > espera >
+ * programada > otro > atendida) y va completando `take` con las solicitudes
+ * más recientes de cada grupo — nunca usa `isHistorical` para ordenar, ya
+ * que ese flag describe el contexto de importación, no la antigüedad real
+ * de la solicitud (que viene de `fecha`).
+ */
+export async function listOperationalMaintenanceRequests(params: OperationalRequestsParams = {}) {
+  const { bucket, sinceDays, take = 8 } = params;
+
+  const dateWhere: Prisma.MaintenanceRequestWhereInput | undefined = sinceDays
+    ? { fecha: { gte: new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000) } }
+    : undefined;
+
+  const distinctEstados = await getDistinctEstados();
+  const estadosByBucket = new Map<EstadoBucket, string[]>();
+  for (const estado of distinctEstados) {
+    const { bucket: estadoBucket } = classifyEstado(estado);
+    const list = estadosByBucket.get(estadoBucket) ?? [];
+    list.push(estado);
+    estadosByBucket.set(estadoBucket, list);
+  }
+
+  async function fetchBucket(targetBucket: EstadoBucket, limit: number) {
+    if (limit <= 0) return [];
+    const estados = estadosByBucket.get(targetBucket) ?? [];
+
+    let estadoWhere: Prisma.MaintenanceRequestWhereInput;
+    if (targetBucket === "otro") {
+      // "otro" también incluye solicitudes con ESTADO vacío (ver classifyEstado).
+      estadoWhere =
+        estados.length > 0 ? { OR: [{ estado: { in: estados } }, { estado: null }] } : { estado: null };
+    } else {
+      if (estados.length === 0) return [];
+      estadoWhere = { estado: { in: estados } };
+    }
+
+    return db.maintenanceRequest.findMany({
+      where: { ...(dateWhere ?? {}), ...estadoWhere },
+      orderBy: { fecha: "desc" },
+      take: limit,
+      include: { _count: { select: { logs: true } } },
+    });
+  }
+
+  if (bucket) {
+    return fetchBucket(bucket, take);
+  }
+
+  const results: Awaited<ReturnType<typeof fetchBucket>> = [];
+  for (const priorityBucket of ESTADO_BUCKET_PRIORITY) {
+    if (results.length >= take) break;
+    const rows = await fetchBucket(priorityBucket, take - results.length);
+    results.push(...rows);
+  }
+  return results;
 }
 
 export function listImportBatches(take = 20) {

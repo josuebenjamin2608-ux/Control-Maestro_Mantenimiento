@@ -1,12 +1,13 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ESTADO_BUCKET_LABELS } from "@/lib/estado";
 import type { DashboardStats } from "@/server/services/maintenance-requests.service";
 
 const ROWS: { key: keyof Omit<DashboardStats, "total">; label: string; dotClass: string }[] = [
-  { key: "pendientes", label: "Pendientes", dotClass: "bg-destructive" },
-  { key: "espera", label: "En espera", dotClass: "bg-warning" },
-  { key: "programadas", label: "Programadas / en ejecución", dotClass: "bg-primary" },
-  { key: "atendidas", label: "Atendidas", dotClass: "bg-success" },
-  { key: "otros", label: "Otros", dotClass: "bg-muted-foreground" },
+  { key: "pendientes", label: ESTADO_BUCKET_LABELS.pendiente, dotClass: "bg-destructive" },
+  { key: "espera", label: ESTADO_BUCKET_LABELS.espera, dotClass: "bg-warning" },
+  { key: "programadas", label: ESTADO_BUCKET_LABELS.programada, dotClass: "bg-primary" },
+  { key: "atendidas", label: ESTADO_BUCKET_LABELS.atendida, dotClass: "bg-success" },
+  { key: "otros", label: ESTADO_BUCKET_LABELS.otro, dotClass: "bg-muted-foreground" },
 ];
 
 /** Reutiliza el mismo DashboardStats ya calculado para los KPIs — sin nueva consulta. */
