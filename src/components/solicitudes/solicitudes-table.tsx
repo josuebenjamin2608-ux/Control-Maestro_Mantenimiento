@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/table";
 import { formatCalendarDate } from "@/lib/dates";
 import { daysSince } from "@/lib/estado";
+import { formatResponsibleArea } from "@/lib/responsible-area";
 import type { listMaintenanceRequests } from "@/server/services/maintenance-requests.service";
 
 type SolicitudRow = Awaited<ReturnType<typeof listMaintenanceRequests>>["items"][number];
@@ -87,6 +88,9 @@ export function SolicitudesTable({
             {request.problema ? (
               <p className="line-clamp-2 text-sm text-muted-foreground">{request.problema}</p>
             ) : null}
+            <span className="text-xs text-muted-foreground">
+              Responsable: {formatResponsibleArea(request.responsibleArea)}
+            </span>
             <Link
               href={detailHref(request.parte)}
               onClick={(event) => event.stopPropagation()}
@@ -109,6 +113,7 @@ export function SolicitudesTable({
               <TableHead>Fecha</TableHead>
               {compact ? null : <TableHead>Antigüedad</TableHead>}
               <TableHead>Estado</TableHead>
+              <TableHead>Responsable</TableHead>
               {compact ? null : <TableHead>Minutas</TableHead>}
               <TableHead className="text-right">Acción</TableHead>
             </TableRow>
@@ -142,6 +147,9 @@ export function SolicitudesTable({
                   )}
                   <TableCell>
                     <EstadoBadge estado={request.estado} />
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-muted-foreground">
+                    {formatResponsibleArea(request.responsibleArea)}
                   </TableCell>
                   {compact ? null : <TableCell>{request._count.logs}</TableCell>}
                   <TableCell

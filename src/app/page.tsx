@@ -6,6 +6,7 @@ import { RecentActivityPanel } from "@/components/layout/recent-activity-panel";
 import { RouteTabs } from "@/components/layout/route-tabs";
 import { EstadoBreakdownCard } from "@/components/dashboard/estado-breakdown-card";
 import { RangeSelect, type RangeOption } from "@/components/dashboard/range-select";
+import { ResponsibleAreaCard } from "@/components/dashboard/responsible-area-card";
 import { SolicitudesTable } from "@/components/solicitudes/solicitudes-table";
 import { Card, CardContent } from "@/components/ui/card";
 import { ESTADO_BUCKET_LABELS, type EstadoBucket } from "@/lib/estado";
@@ -13,6 +14,7 @@ import { cn } from "@/lib/utils";
 import {
   getBucketStatValue,
   getDashboardStats,
+  getOpenRequestsByResponsibleArea,
   listOperationalMaintenanceRequests,
 } from "@/server/services/maintenance-requests.service";
 
@@ -116,7 +118,7 @@ export default async function DashboardPage({
   const selectedBucket: EstadoBucket | undefined =
     bucketParam && bucketParam !== "todas" ? bucketParam : undefined;
 
-  const [stats, operationalRequests] = await Promise.all([
+  const [stats, operationalRequests, responsibleAreaSummary] = await Promise.all([
     getDashboardStats(selectedRange.sinceDays),
     listOperationalMaintenanceRequests({
       bucket: selectedBucket,
@@ -129,6 +131,7 @@ export default async function DashboardPage({
       // Nunca muestra Realizado. El KPI Total (bucket=todas) sí las incluye.
       excludeAtendida: !bucketParam,
     }),
+    getOpenRequestsByResponsibleArea(),
   ]);
 
   const currentDashboardHref = buildDashboardHref(
@@ -285,6 +288,7 @@ export default async function DashboardPage({
 
           <div className="flex flex-col gap-6">
             <EstadoBreakdownCard stats={stats} />
+            <ResponsibleAreaCard summary={responsibleAreaSummary} />
             <RecentActivityPanel />
           </div>
         </div>

@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, UserRound } from "lucide-react";
+import { ArrowLeft, Building2, UserRound } from "lucide-react";
 
 import { AppShell } from "@/components/layout/app-shell";
 import { HistoricalBadge } from "@/components/imports/outcome-badge";
 import { EstadoBadge } from "@/components/solicitudes/estado-badge";
 import { MinutaTimeline } from "@/components/solicitudes/minuta-timeline";
+import { ResponsibleAreaSelect } from "@/components/solicitudes/responsible-area-select";
 import { TechnicianAssignment } from "@/components/solicitudes/technician-assignment";
 import {
   Card,
@@ -132,6 +133,24 @@ export default async function SolicitudDetailPage({
                 <TextBlock label="Tarea" value={request.tarea} />
               </div>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base text-foreground">
+              <Building2 className="size-4 text-muted-foreground" />
+              Responsable
+            </CardTitle>
+            <CardDescription>
+              Área responsable de gestionar esta solicitud (independiente del técnico asignado).
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ResponsibleAreaSelect
+              maintenanceRequestId={request.id}
+              value={request.responsibleArea}
+            />
           </CardContent>
         </Card>
 

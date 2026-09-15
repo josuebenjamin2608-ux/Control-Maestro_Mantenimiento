@@ -7,6 +7,7 @@ import { EstadoDistribution } from "@/components/indicadores/estado-distribution
 import { KpiRow } from "@/components/indicadores/kpi-row";
 import { MachineHighlights } from "@/components/indicadores/machine-highlights";
 import { PeriodFilterBar } from "@/components/indicadores/period-filter-bar";
+import { ResponsibleAreaDistribution } from "@/components/indicadores/responsible-area-distribution";
 import { YearMonthlyChart } from "@/components/indicadores/year-monthly-chart";
 import {
   Card,
@@ -25,6 +26,7 @@ import {
   getPeriodSnapshot,
   getPeriodStats,
   getPreviousPeriodOf,
+  getResponsibleAreaDistributionForPeriod,
   type PeriodSnapshot,
 } from "@/server/services/indicators.service";
 
@@ -61,14 +63,16 @@ export default async function IndicadoresPage({
   const previousPeriod = getPreviousPeriodOf(period);
   const { start, end } = getPeriodRange(selectedYear, selectedMonth);
 
-  const [stats, closedTasks, backlog, machineData, monthlyData, previousSnapshot] = await Promise.all([
-    getPeriodStats(start, end),
-    getClosedTasksForPeriod(start, end),
-    getBacklogBreakdown(start),
-    getMachineDistributionForPeriod(start, end, 10),
-    getMonthlyCountsForYear(selectedYear),
-    getPeriodSnapshot(previousPeriod),
-  ]);
+  const [stats, closedTasks, backlog, machineData, monthlyData, previousSnapshot, responsibleAreaData] =
+    await Promise.all([
+      getPeriodStats(start, end),
+      getClosedTasksForPeriod(start, end),
+      getBacklogBreakdown(start),
+      getMachineDistributionForPeriod(start, end, 10),
+      getMonthlyCountsForYear(selectedYear),
+      getPeriodSnapshot(previousPeriod),
+      getResponsibleAreaDistributionForPeriod(start, end),
+    ]);
 
   const currentSnapshot: PeriodSnapshot = {
     period,
@@ -164,6 +168,16 @@ export default async function IndicadoresPage({
             </CardContent>
           </Card>
         </div>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base text-foreground">Distribución por responsable</CardTitle>
+            <CardDescription>Solicitudes del período por área responsable.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ResponsibleAreaDistribution breakdown={responsibleAreaData} />
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader className="pb-2">

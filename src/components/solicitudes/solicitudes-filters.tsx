@@ -3,16 +3,20 @@
 import { useRef } from "react";
 import { Search } from "lucide-react";
 
+import { RESPONSIBLE_AREA_OPTIONS, RESPONSIBLE_AREA_UNDEFINED_VALUE } from "@/lib/responsible-area";
+
 export function SolicitudesFilters({
   q,
   maquina,
   estado,
+  responsable,
   machines,
   estados,
 }: {
   q?: string;
   maquina?: string;
   estado?: string;
+  responsable?: string;
   machines: string[];
   estados: string[];
 }) {
@@ -57,6 +61,21 @@ export function SolicitudesFilters({
             {e}
           </option>
         ))}
+      </select>
+
+      <select
+        name="responsable"
+        defaultValue={responsable ?? ""}
+        onChange={() => formRef.current?.requestSubmit()}
+        className="h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <option value="">Todos los responsables</option>
+        {RESPONSIBLE_AREA_OPTIONS.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+        <option value={RESPONSIBLE_AREA_UNDEFINED_VALUE}>Sin definir</option>
       </select>
 
       <button

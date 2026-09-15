@@ -231,6 +231,38 @@ export async function getClosedTasksForPeriod(start: Date, end: Date): Promise<n
   return count;
 }
 
+export interface ResponsibleAreaPeriodBreakdown {
+  mantenimiento: number;
+  produccion: number;
+  /** responsibleArea = null. */
+  sinDefinir: number;
+}
+
+/**
+ * Distribución de Solicitudes del período por área responsable —
+ * independiente de ESTADO (a diferencia de getPeriodStats/getClosedTasksForPeriod,
+ * cuenta TODAS las solicitudes del período, no solo las abiertas).
+ */
+export async function getResponsibleAreaDistributionForPeriod(
+  start: Date,
+  end: Date,
+): Promise<ResponsibleAreaPeriodBreakdown> {
+  const grouped = await db.maintenanceRequest.groupBy({
+    by: ["responsibleArea"],
+    where: { fecha: { gte: start, lt: end } },
+    _count: { _all: true },
+  });
+
+  const result: ResponsibleAreaPeriodBreakdown = { mantenimiento: 0, produccion: 0, sinDefinir: 0 };
+  for (const group of grouped) {
+    const count = group._count._all;
+    if (group.responsibleArea === "MANTENIMIENTO") result.mantenimiento += count;
+    else if (group.responsibleArea === "PRODUCCION") result.produccion += count;
+    else result.sinDefinir += count;
+  }
+  return result;
+}
+
 export interface PeriodSnapshot {
   period: Period;
   label: string;

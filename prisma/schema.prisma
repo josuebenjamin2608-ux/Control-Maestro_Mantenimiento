@@ -318,6 +318,15 @@ model MaintenanceHistory {
 // para que el mapeo Excel -> base de datos sea trazable sin traducciones.
 // ---------------------------------------------------------------------------
 
+/// Área responsable de gestionar una Solicitud. Independiente del técnico
+/// asignado (ver MaintenanceRequestTechnician): esto identifica QUÉ ÁREA
+/// debe atenderla, no QUIÉN la ejecuta. Nunca se infiere automáticamente
+/// (ver responsibleArea abajo) — solo se establece manualmente desde la UI.
+enum MaintenanceRequestResponsibleArea {
+  MANTENIMIENTO
+  PRODUCCION
+}
+
 /// Registro de Solicitudes: fuente principal del flujo. `parte` es el
 /// identificador externo único (columna PARTE del Excel). No se vincula
 /// todavía a Machine/User: los datos de máquina/empleado se guardan tal
@@ -337,6 +346,12 @@ model MaintenanceRequest {
   /// Texto crudo de la columna ESTADO. No se normaliza a un enum propio para
   /// no inventar vocabulario que no viene de la fuente.
   estado   String?
+
+  /// Área responsable (Mantenimiento/Producción). No viene del Excel de
+  /// Solicitudes ni se toca durante su importación (ver
+  /// maintenance-request-import.service.ts): null = sin definir todavía,
+  /// tanto para solicitudes nuevas como para todo el histórico existente.
+  responsibleArea MaintenanceRequestResponsibleArea?
 
   /// true si esta solicitud se cargó marcando explícitamente la importación
   /// como "histórico inicial" (nunca se infiere automáticamente).

@@ -26,13 +26,19 @@ const TABS = [
 export default async function SolicitudesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; maquina?: string; estado?: string; skip?: string }>;
+  searchParams: Promise<{
+    q?: string;
+    maquina?: string;
+    estado?: string;
+    responsable?: string;
+    skip?: string;
+  }>;
 }) {
-  const { q, maquina, estado, skip: skipParam } = await searchParams;
+  const { q, maquina, estado, responsable, skip: skipParam } = await searchParams;
   const skip = skipParam ? Math.max(0, Number(skipParam) || 0) : 0;
 
   const [{ items, total }, machines, estados] = await Promise.all([
-    listMaintenanceRequests({ search: q, maquina, estado, take: TAKE, skip }),
+    listMaintenanceRequests({ search: q, maquina, estado, responsable, take: TAKE, skip }),
     getDistinctMachines(),
     getDistinctEstados(),
   ]);
@@ -41,6 +47,7 @@ export default async function SolicitudesPage({
   if (q) currentParams.set("q", q);
   if (maquina) currentParams.set("maquina", maquina);
   if (estado) currentParams.set("estado", estado);
+  if (responsable) currentParams.set("responsable", responsable);
   if (skip) currentParams.set("skip", String(skip));
   const currentQs = currentParams.toString();
   const currentSolicitudesHref = currentQs ? `/solicitudes?${currentQs}` : "/solicitudes";
@@ -61,6 +68,7 @@ export default async function SolicitudesPage({
           q={q}
           maquina={maquina}
           estado={estado}
+          responsable={responsable}
           machines={machines}
           estados={estados}
         />
@@ -70,7 +78,7 @@ export default async function SolicitudesPage({
             <SolicitudesTable items={items} backHref={currentSolicitudesHref} />
             <Pagination
               basePath="/solicitudes"
-              searchParams={{ q, maquina, estado }}
+              searchParams={{ q, maquina, estado, responsable }}
               total={total}
               take={TAKE}
               skip={skip}

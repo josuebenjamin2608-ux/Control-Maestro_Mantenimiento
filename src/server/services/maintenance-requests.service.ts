@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { classifyEstado, ESTADO_BUCKET_PRIORITY, type EstadoBucket } from "@/lib/estado";
+import { RESPONSIBLE_AREA_UNDEFINED_VALUE } from "@/lib/responsible-area";
 import type { ImportFileType, Prisma } from "@/generated/prisma/client";
 
 export function getMaintenanceRequestByParte(parte: string) {
@@ -29,12 +30,18 @@ export interface ListMaintenanceRequestsParams {
   maquina?: string;
   /** Filtra por valor exacto de `estado` (uno de los devueltos por getDistinctEstados). */
   estado?: string;
+  /**
+   * Filtra por área responsable: "MANTENIMIENTO" / "PRODUCCION" (valor
+   * exacto del enum) o RESPONSIBLE_AREA_UNDEFINED_VALUE ("Sin definir" ->
+   * responsibleArea = null). Cualquier otro valor se ignora.
+   */
+  responsable?: string;
   take?: number;
   skip?: number;
 }
 
 export async function listMaintenanceRequests(params: ListMaintenanceRequestsParams = {}) {
-  const { search, maquina, estado, take = 50, skip = 0 } = params;
+  const { search, maquina, estado, responsable, take = 50, skip = 0 } = params;
   const trimmedSearch = search?.trim();
 
   const conditions: Prisma.MaintenanceRequestWhereInput[] = [];
@@ -49,6 +56,11 @@ export async function listMaintenanceRequests(params: ListMaintenanceRequestsPar
   }
   if (maquina) conditions.push({ maquina });
   if (estado) conditions.push({ estado });
+  if (responsable === RESPONSIBLE_AREA_UNDEFINED_VALUE) {
+    conditions.push({ responsibleArea: null });
+  } else if (responsable === "MANTENIMIENTO" || responsable === "PRODUCCION") {
+    conditions.push({ responsibleArea: responsable });
+  }
 
   const where: Prisma.MaintenanceRequestWhereInput | undefined = conditions.length
     ? { AND: conditions }
@@ -297,6 +309,37 @@ const BUCKET_STATS_KEY: Record<EstadoBucket, keyof Omit<DashboardStats, "total">
 /** Único punto de acceso bucket -> valor de DashboardStats (dashboard e Indicadores comparten esto). */
 export function getBucketStatValue(stats: DashboardStats, bucket: EstadoBucket): number {
   return stats[BUCKET_STATS_KEY[bucket]];
+}
+
+export interface ResponsibleAreaSummary {
+  mantenimiento: number;
+  produccion: number;
+  /** responsibleArea = null. */
+  sinDefinir: number;
+}
+
+/**
+ * Solicitudes ABIERTAS (ESTADO != Realizado, misma clasificación que
+ * getDashboardStats/classifyEstado) agrupadas por área responsable, para el
+ * resumen del Dashboard. Responsable es independiente del ESTADO y del
+ * técnico asignado: esto solo cuenta cuántas solicitudes no resueltas le
+ * corresponden a cada área.
+ */
+export async function getOpenRequestsByResponsibleArea(): Promise<ResponsibleAreaSummary> {
+  const grouped = await db.maintenanceRequest.groupBy({
+    by: ["estado", "responsibleArea"],
+    _count: { _all: true },
+  });
+
+  const summary: ResponsibleAreaSummary = { mantenimiento: 0, produccion: 0, sinDefinir: 0 };
+  for (const group of grouped) {
+    if (classifyEstado(group.estado).bucket === "atendida") continue;
+    const count = group._count._all;
+    if (group.responsibleArea === "MANTENIMIENTO") summary.mantenimiento += count;
+    else if (group.responsibleArea === "PRODUCCION") summary.produccion += count;
+    else summary.sinDefinir += count;
+  }
+  return summary;
 }
 
 export function listImportBatches(take = 20) {
