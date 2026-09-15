@@ -4,19 +4,26 @@ import { ArrowRight, X } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { RecentActivityPanel } from "@/components/layout/recent-activity-panel";
 import { RouteTabs } from "@/components/layout/route-tabs";
+import { BacklogCard } from "@/components/indicadores/backlog-card";
+import { PeriodFilterBar } from "@/components/indicadores/period-filter-bar";
 import { EstadoBreakdownCard } from "@/components/dashboard/estado-breakdown-card";
-import { RangeSelect, type RangeOption } from "@/components/dashboard/range-select";
 import { ResponsibleAreaCard } from "@/components/dashboard/responsible-area-card";
 import { SolicitudesTable } from "@/components/solicitudes/solicitudes-table";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ESTADO_BUCKET_LABELS, type EstadoBucket } from "@/lib/estado";
+import { formatPeriodLabel, getPeriodRange, type Period } from "@/lib/period";
 import { cn } from "@/lib/utils";
 import {
   getBucketStatValue,
-  getDashboardStats,
   getOpenRequestsByResponsibleArea,
+  listBacklogMaintenanceRequests,
   listOperationalMaintenanceRequests,
 } from "@/server/services/maintenance-requests.service";
+import {
+  getAvailableYears,
+  getBacklogBreakdown,
+  getPeriodStats,
+} from "@/server/services/indicators.service";
 
 // Esta página consulta la base de datos; no se puede pre-renderizar
 // estáticamente en build (no hay DB disponible en ese paso), debe
@@ -30,12 +37,8 @@ const TABS = [
   { label: "Mantenimiento preventivo", href: "/preventivo", available: false },
 ];
 
-const RANGE_OPTIONS: (RangeOption & { sinceDays?: number })[] = [
-  { label: "Todos los tiempos", value: "all" },
-  { label: "Últimos 7 días", value: "7", sinceDays: 7 },
-  { label: "Últimos 30 días", value: "30", sinceDays: 30 },
-  { label: "Últimos 90 días", value: "90", sinceDays: 90 },
-];
+/** Cuántas solicitudes de backlog histórico se listan en la tabla (el conteo total sí es exacto, ver BacklogCard). */
+const BACKLOG_LIST_TAKE = 10;
 
 const VALID_BUCKETS: EstadoBucket[] = ["pendiente", "espera", "programada", "atendida", "otro"];
 
@@ -48,12 +51,11 @@ function parseBucketParam(value: string | undefined): BucketParam {
   return (VALID_BUCKETS as string[]).includes(value) ? (value as EstadoBucket) : undefined;
 }
 
-function buildDashboardHref(rangeValue: string, bucketValue?: string) {
-  const params = new URLSearchParams();
-  if (rangeValue !== "all") params.set("range", rangeValue);
+/** El Dashboard siempre navega con year/month explícitos: nunca depende de un default implícito de la URL. */
+function buildDashboardHref(year: number, month: number, bucketValue?: string) {
+  const params = new URLSearchParams({ year: String(year), month: String(month) });
   if (bucketValue) params.set("bucket", bucketValue);
-  const qs = params.toString();
-  return qs ? `/?${qs}` : "/";
+  return `/?${params.toString()}`;
 }
 
 const BUCKET_TONE: Record<EstadoBucket, "destructive" | "warning" | "primary" | "success" | "muted"> = {
@@ -67,12 +69,14 @@ const BUCKET_TONE: Record<EstadoBucket, "destructive" | "warning" | "primary" | 
 function KpiLink({
   label,
   value,
+  periodLabel,
   tone,
   href,
   active,
 }: {
   label: string;
   value: number;
+  periodLabel: string;
   tone: "destructive" | "warning" | "primary" | "success" | "muted";
   href: string;
   active: boolean;
@@ -101,6 +105,7 @@ function KpiLink({
           >
             {value}
           </span>
+          <span className="text-xs text-muted-foreground">{periodLabel}</span>
         </CardContent>
       </Card>
     </Link>
@@ -110,46 +115,75 @@ function KpiLink({
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ range?: string; bucket?: string }>;
+  searchParams: Promise<{ year?: string; month?: string; bucket?: string }>;
 }) {
-  const { range, bucket } = await searchParams;
-  const selectedRange = RANGE_OPTIONS.find((option) => option.value === range) ?? RANGE_OPTIONS[0];
+  const { year: yearParam, month: monthParam, bucket } = await searchParams;
+
+  // Default explícito: mes y año ACTUALES — nunca "todos los tiempos". Misma
+  // validación que /indicadores para que ambas páginas se comporten igual
+  // ante un year/month inválido en la URL.
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+
+  const parsedYear = yearParam ? Number(yearParam) : currentYear;
+  const parsedMonth = monthParam ? Number(monthParam) : currentMonth;
+  const selectedYear =
+    Number.isInteger(parsedYear) && parsedYear > 1900 && parsedYear < 2200 ? parsedYear : currentYear;
+  const selectedMonth =
+    Number.isInteger(parsedMonth) && parsedMonth >= 1 && parsedMonth <= 12 ? parsedMonth : currentMonth;
+
+  const period: Period = { year: selectedYear, month: selectedMonth };
+  const periodLabel = formatPeriodLabel(period);
+  // Mismo [start, end) UTC que /indicadores (ver src/lib/period.ts) — la
+  // corrección de fechas UTC no se toca, solo se reutiliza.
+  const { start, end } = getPeriodRange(selectedYear, selectedMonth);
+
   const bucketParam = parseBucketParam(bucket);
   const selectedBucket: EstadoBucket | undefined =
     bucketParam && bucketParam !== "todas" ? bucketParam : undefined;
 
-  const [stats, operationalRequests, responsibleAreaSummary] = await Promise.all([
-    getDashboardStats(selectedRange.sinceDays),
-    listOperationalMaintenanceRequests({
-      bucket: selectedBucket,
-      sinceDays: selectedRange.sinceDays,
-      // Vista por defecto ("Solicitudes que requieren atención"): ESTADO !=
-      // Realizado, SIN límite artificial — deben verse todas. Con un bucket
-      // específico seleccionado (KPI clickeado) se mantiene un tope
-      // razonable, ya que ese caso no forma parte de este ajuste.
-      take: selectedBucket ? 15 : undefined,
-      // Nunca muestra Realizado. El KPI Total (bucket=todas) sí las incluye.
-      excludeAtendida: !bucketParam,
-    }),
-    getOpenRequestsByResponsibleArea(),
-  ]);
+  const [years, stats, operationalRequests, backlog, backlogItems, responsibleAreaSummary] =
+    await Promise.all([
+      getAvailableYears(),
+      // Único cambio de fondo: los KPI principales vienen de getPeriodStats
+      // (acotado a FECHA en [start, end)) en vez de todo el histórico —
+      // misma función ya usada y validada en /indicadores.
+      getPeriodStats(start, end),
+      listOperationalMaintenanceRequests({
+        bucket: selectedBucket,
+        period: { start, end },
+        // Vista por defecto ("Solicitudes del mes que requieren atención"):
+        // ESTADO != Realizado, SIN límite artificial — deben verse todas las
+        // del mes. Con un bucket específico seleccionado (KPI clickeado) se
+        // mantiene un tope razonable.
+        take: selectedBucket ? 15 : undefined,
+        // Nunca muestra Realizado. El KPI Total (bucket=todas) sí las incluye.
+        excludeAtendida: !bucketParam,
+      }),
+      getBacklogBreakdown(start),
+      listBacklogMaintenanceRequests({ before: start, take: BACKLOG_LIST_TAKE }),
+      getOpenRequestsByResponsibleArea(),
+    ]);
 
   const currentDashboardHref = buildDashboardHref(
-    selectedRange.value,
+    selectedYear,
+    selectedMonth,
     bucketParam === "todas" ? "todas" : selectedBucket,
   );
 
+  // ATENDIDAS DEL MES / SOLICITUDES DEL MES — nunca el total histórico.
   const atendidasRatio = stats.total > 0 ? Math.round((stats.atendidas / stats.total) * 100) : 0;
   const showOtrosKpi = stats.otros > 0;
 
   const sectionTitle =
     bucketParam === "todas"
-      ? "Todas las solicitudes"
+      ? `Todas las solicitudes de ${periodLabel}`
       : selectedBucket === "otro"
-        ? "Otros estados"
+        ? "Otros estados del mes"
         : selectedBucket
-          ? `Solicitudes ${ESTADO_BUCKET_LABELS[selectedBucket].toLowerCase()}`
-          : "Solicitudes que requieren atención";
+          ? `Solicitudes ${ESTADO_BUCKET_LABELS[selectedBucket].toLowerCase()} del mes`
+          : "Solicitudes del mes que requieren atención";
 
   const activeCount =
     bucketParam === "todas"
@@ -160,8 +194,10 @@ export default async function DashboardPage({
 
   const sectionSubtitle =
     activeCount !== undefined
-      ? `${activeCount} solicitud${activeCount === 1 ? "" : "es"} en esta categoría.`
-      : "Solicitudes pendientes, en espera y más recientes.";
+      ? `${activeCount} solicitud${activeCount === 1 ? "" : "es"} en esta categoría, con FECHA en ${periodLabel}.`
+      : `Solicitudes con FECHA en ${periodLabel}: pendientes, en espera o programadas.`;
+
+  const backlogHiddenCount = Math.max(0, backlog.total - backlogItems.length);
 
   return (
     <AppShell title="Panel de control">
@@ -172,11 +208,12 @@ export default async function DashboardPage({
               Control Maestro Mantenimiento
             </h2>
             <p className="text-sm text-muted-foreground">
-              Vista general de Solicitudes y Minutas importadas.
+              Indicadores de {periodLabel} — los KPI principales corresponden al período
+              seleccionado, no al histórico completo.
             </p>
           </div>
 
-          <RangeSelect options={RANGE_OPTIONS} value={selectedRange.value} />
+          <PeriodFilterBar years={years} selectedYear={selectedYear} selectedMonth={selectedMonth} />
         </div>
 
         <RouteTabs tabs={TABS} />
@@ -188,7 +225,7 @@ export default async function DashboardPage({
           )}
         >
           <Link
-            href={buildDashboardHref(selectedRange.value, "todas")}
+            href={buildDashboardHref(selectedYear, selectedMonth, "todas")}
             className="block rounded-lg sm:col-span-2 lg:col-span-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Card
@@ -199,97 +236,145 @@ export default async function DashboardPage({
             >
               <CardContent className="flex h-full flex-col justify-center gap-2 py-5">
                 <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Total de solicitudes
+                  Solicitudes del mes
                 </span>
                 <span className="text-3xl font-semibold text-foreground">{stats.total}</span>
                 <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
                   <div className="h-full bg-success" style={{ width: `${atendidasRatio}%` }} />
                 </div>
-                <span className="text-xs text-muted-foreground">{atendidasRatio}% atendidas</span>
+                <span className="text-xs text-muted-foreground">
+                  {atendidasRatio}% atendidas · {periodLabel}
+                </span>
               </CardContent>
             </Card>
           </Link>
 
           <KpiLink
-            label={ESTADO_BUCKET_LABELS.pendiente}
+            label="Pendientes del mes"
             value={stats.pendientes}
+            periodLabel={periodLabel}
             tone={BUCKET_TONE.pendiente}
-            href={buildDashboardHref(selectedRange.value, "pendiente")}
+            href={buildDashboardHref(selectedYear, selectedMonth, "pendiente")}
             active={selectedBucket === "pendiente"}
           />
           <KpiLink
-            label={ESTADO_BUCKET_LABELS.espera}
+            label="En espera del mes"
             value={stats.espera}
+            periodLabel={periodLabel}
             tone={BUCKET_TONE.espera}
-            href={buildDashboardHref(selectedRange.value, "espera")}
+            href={buildDashboardHref(selectedYear, selectedMonth, "espera")}
             active={selectedBucket === "espera"}
           />
           <KpiLink
-            label={ESTADO_BUCKET_LABELS.programada}
+            label="Programadas / en ejecución"
             value={stats.programadas}
+            periodLabel={periodLabel}
             tone={BUCKET_TONE.programada}
-            href={buildDashboardHref(selectedRange.value, "programada")}
+            href={buildDashboardHref(selectedYear, selectedMonth, "programada")}
             active={selectedBucket === "programada"}
           />
           <KpiLink
-            label={ESTADO_BUCKET_LABELS.atendida}
+            label="Atendidas del mes"
             value={stats.atendidas}
+            periodLabel={periodLabel}
             tone={BUCKET_TONE.atendida}
-            href={buildDashboardHref(selectedRange.value, "atendida")}
+            href={buildDashboardHref(selectedYear, selectedMonth, "atendida")}
             active={selectedBucket === "atendida"}
           />
           {showOtrosKpi ? (
             <KpiLink
-              label={ESTADO_BUCKET_LABELS.otro}
+              label="Otros (mes)"
               value={stats.otros}
+              periodLabel={periodLabel}
               tone={BUCKET_TONE.otro}
-              href={buildDashboardHref(selectedRange.value, "otro")}
+              href={buildDashboardHref(selectedYear, selectedMonth, "otro")}
               active={selectedBucket === "otro"}
             />
           ) : null}
         </div>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
-          <div className="flex flex-col gap-3 lg:col-span-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h3 className="text-sm font-medium text-foreground">{sectionTitle}</h3>
-                <p className="text-xs text-muted-foreground">{sectionSubtitle}</p>
-              </div>
-              <div className="flex items-center gap-3">
-                {selectedBucket ? (
+          <div className="flex flex-col gap-6 lg:col-span-4">
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-medium text-foreground">{sectionTitle}</h3>
+                  <p className="text-xs text-muted-foreground">{sectionSubtitle}</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  {selectedBucket ? (
+                    <Link
+                      href={buildDashboardHref(selectedYear, selectedMonth)}
+                      className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="size-3.5" />
+                      Quitar filtro
+                    </Link>
+                  ) : null}
                   <Link
-                    href={buildDashboardHref(selectedRange.value)}
-                    className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+                    href="/solicitudes"
+                    className="flex items-center gap-1 text-sm text-primary hover:underline"
                   >
-                    <X className="size-3.5" />
-                    Quitar filtro
+                    Ver todas
+                    <ArrowRight className="size-3.5" />
                   </Link>
-                ) : null}
-                <Link
-                  href="/solicitudes"
-                  className="flex items-center gap-1 text-sm text-primary hover:underline"
-                >
-                  Ver todas
-                  <ArrowRight className="size-3.5" />
-                </Link>
+                </div>
               </div>
+              <Card>
+                <CardContent className="max-h-[32rem] overflow-y-auto px-0">
+                  <SolicitudesTable
+                    items={operationalRequests}
+                    compact
+                    backHref={currentDashboardHref}
+                  />
+                </CardContent>
+              </Card>
             </div>
-            <Card>
-              <CardContent className="max-h-[32rem] overflow-y-auto px-0">
-                <SolicitudesTable
-                  items={operationalRequests}
-                  compact
-                  backHref={currentDashboardHref}
-                />
-              </CardContent>
-            </Card>
+
+            <div className="flex flex-col gap-3">
+              <div>
+                <h3 className="text-sm font-medium text-foreground">Backlog histórico pendiente</h3>
+                <p className="text-xs text-muted-foreground">
+                  {backlog.total} solicitud{backlog.total === 1 ? "" : "es"} con FECHA anterior a{" "}
+                  {periodLabel} que continúan abiertas (no Realizado)
+                  {backlogHiddenCount > 0
+                    ? ` — mostrando las ${backlogItems.length} más antiguas`
+                    : ""}
+                  .
+                </p>
+              </div>
+              <Card>
+                <CardContent className="max-h-[24rem] overflow-y-auto px-0">
+                  <SolicitudesTable items={backlogItems} compact backHref={currentDashboardHref} />
+                </CardContent>
+              </Card>
+            </div>
           </div>
 
           <div className="flex flex-col gap-6">
             <EstadoBreakdownCard stats={stats} />
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm text-foreground">Backlog acumulado</CardTitle>
+                <CardDescription>
+                  Trabajo pendiente que viene de períodos anteriores a {periodLabel} — no es un
+                  indicador del mes.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <BacklogCard backlog={backlog} />
+              </CardContent>
+            </Card>
+
             <ResponsibleAreaCard summary={responsibleAreaSummary} />
-            <RecentActivityPanel />
+
+            <div className="flex flex-col gap-1.5">
+              <RecentActivityPanel />
+              <p className="px-1 text-xs text-muted-foreground">
+                Historial completo de importaciones — no depende del período seleccionado.
+              </p>
+            </div>
           </div>
         </div>
       </div>

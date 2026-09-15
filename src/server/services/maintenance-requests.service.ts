@@ -172,49 +172,33 @@ export interface DashboardStats {
 }
 
 /**
- * Cuenta solicitudes reales agrupadas por ESTADO (una sola consulta) y las
- * clasifica en el servidor usando `classifyEstado` — mismo texto real,
- * agrupado por la heurística de palabras clave, no valores inventados.
+ * Where-clause real para "ESTADO != Realizado": construida a partir de los
+ * valores DISTINCT de ESTADO realmente presentes (vía classifyEstado), nunca
+ * de una lista inventada. Única fuente de verdad de "abierta" compartida por
+ * el Dashboard (listOperationalMaintenanceRequests/listBacklogMaintenanceRequests
+ * más abajo) e Indicadores (getBacklogBeforePeriod/getBacklogBreakdown en
+ * indicators.service.ts), para no mantener dos definiciones que puedan
+ * divergir.
  */
-export async function getDashboardStats(sinceDays?: number): Promise<DashboardStats> {
-  const where: Prisma.MaintenanceRequestWhereInput | undefined = sinceDays
-    ? { fecha: { gte: new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000) } }
-    : undefined;
-
-  const grouped = await db.maintenanceRequest.groupBy({
-    by: ["estado"],
-    where,
-    _count: { _all: true },
-  });
-
-  const stats: DashboardStats = {
-    total: 0,
-    pendientes: 0,
-    espera: 0,
-    programadas: 0,
-    atendidas: 0,
-    otros: 0,
-  };
-
-  for (const group of grouped) {
-    const count = group._count._all;
-    stats.total += count;
-
-    const { bucket } = classifyEstado(group.estado);
-    if (bucket === "pendiente") stats.pendientes += count;
-    else if (bucket === "espera") stats.espera += count;
-    else if (bucket === "programada") stats.programadas += count;
-    else if (bucket === "atendida") stats.atendidas += count;
-    else stats.otros += count;
-  }
-
-  return stats;
+export async function getNonAtendidaEstadoWhere(): Promise<Prisma.MaintenanceRequestWhereInput> {
+  const distinctEstados = await getDistinctEstados();
+  const nonAtendida = distinctEstados.filter((estado) => classifyEstado(estado).bucket !== "atendida");
+  // "otro" (estado null) también cuenta como no resuelta.
+  return nonAtendida.length > 0
+    ? { OR: [{ estado: { in: nonAtendida } }, { estado: null }] }
+    : { estado: null };
 }
 
 export interface OperationalRequestsParams {
   /** Si se omite, se prioriza el orden de ESTADO_BUCKET_PRIORITY (no resueltas primero). */
   bucket?: EstadoBucket;
-  sinceDays?: number;
+  /**
+   * [start, end) UTC del período a filtrar por FECHA (ver getPeriodRange en
+   * src/lib/period.ts). Sin esto, no filtra por fecha (todo el histórico) —
+   * el Dashboard siempre lo pasa; solo queda opcional para no romper otros
+   * usos futuros de este listado que no necesiten acotar por período.
+   */
+  period?: { start: Date; end: Date };
   /** Sin definir = sin límite (trae todas las filas que cumplan el filtro). */
   take?: number;
   /**
@@ -228,13 +212,14 @@ export interface OperationalRequestsParams {
 
 /**
  * Listado operativo para el dashboard: usa `classifyEstado` (la misma
- * clasificación que `getDashboardStats`) para agrupar por bucket, así los
- * contadores de los KPI y las filas que muestra el filtro nunca divergen.
- * El bucket "atendida" corresponde exactamente (y únicamente) a
- * ESTADO = "Realizado" (comparación normalizada, ver classifyEstado) — por
- * eso `excludeAtendida` implementa la regla "ESTADO != Realizado" de forma
- * genérica: cualquier otro valor de ESTADO, conocido o no, cae en algún
- * bucket que SÍ se incluye (los desconocidos van a "otro").
+ * clasificación que `getPeriodStats` en indicators.service.ts) para agrupar
+ * por bucket, así los contadores de los KPI y las filas que muestra el
+ * filtro nunca divergen. El bucket "atendida" corresponde exactamente (y
+ * únicamente) a ESTADO = "Realizado" (comparación normalizada, ver
+ * classifyEstado) — por eso `excludeAtendida` implementa la regla
+ * "ESTADO != Realizado" de forma genérica: cualquier otro valor de ESTADO,
+ * conocido o no, cae en algún bucket que SÍ se incluye (los desconocidos
+ * van a "otro").
  *
  * Sin `bucket`, recorre ESTADO_BUCKET_PRIORITY (pendiente > espera >
  * programada > otro > atendida) y va completando `take` con las solicitudes
@@ -244,10 +229,10 @@ export interface OperationalRequestsParams {
  * TODAS las filas de cada bucket incluido.
  */
 export async function listOperationalMaintenanceRequests(params: OperationalRequestsParams = {}) {
-  const { bucket, sinceDays, take, excludeAtendida = false } = params;
+  const { bucket, period, take, excludeAtendida = false } = params;
 
-  const dateWhere: Prisma.MaintenanceRequestWhereInput | undefined = sinceDays
-    ? { fecha: { gte: new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000) } }
+  const dateWhere: Prisma.MaintenanceRequestWhereInput | undefined = period
+    ? { fecha: { gte: period.start, lt: period.end } }
     : undefined;
 
   const distinctEstados = await getDistinctEstados();
@@ -298,6 +283,31 @@ export async function listOperationalMaintenanceRequests(params: OperationalRequ
   return results;
 }
 
+export interface ListBacklogParams {
+  /** Solicitudes con FECHA anterior a este instante (normalmente el inicio del período seleccionado). */
+  before: Date;
+  /** Sin definir = sin límite. */
+  take?: number;
+}
+
+/**
+ * Backlog histórico: solicitudes con FECHA anterior al período seleccionado
+ * y ESTADO != Realizado (misma clasificación que listOperationalMaintenanceRequests,
+ * vía getNonAtendidaEstadoWhere). Ordenadas por FECHA ascendente (las más
+ * antiguas primero), para priorizar lo que lleva más tiempo abierto —
+ * a diferencia del listado operativo del mes, que ordena por más recientes.
+ */
+export async function listBacklogMaintenanceRequests(params: ListBacklogParams) {
+  const { before, take } = params;
+  const estadoWhere = await getNonAtendidaEstadoWhere();
+  return db.maintenanceRequest.findMany({
+    where: { fecha: { lt: before }, ...estadoWhere },
+    orderBy: { fecha: "asc" },
+    ...(take !== undefined ? { take } : {}),
+    include: { _count: { select: { logs: true } } },
+  });
+}
+
 const BUCKET_STATS_KEY: Record<EstadoBucket, keyof Omit<DashboardStats, "total">> = {
   pendiente: "pendientes",
   espera: "espera",
@@ -319,11 +329,12 @@ export interface ResponsibleAreaSummary {
 }
 
 /**
- * Solicitudes ABIERTAS (ESTADO != Realizado, misma clasificación que
- * getDashboardStats/classifyEstado) agrupadas por área responsable, para el
- * resumen del Dashboard. Responsable es independiente del ESTADO y del
- * técnico asignado: esto solo cuenta cuántas solicitudes no resueltas le
- * corresponden a cada área.
+ * Solicitudes ABIERTAS (ESTADO != Realizado, misma clasificación de
+ * classifyEstado que el resto del sistema) agrupadas por área responsable,
+ * para el resumen del Dashboard. Responsable es independiente del ESTADO y
+ * del técnico asignado: esto solo cuenta cuántas solicitudes no resueltas
+ * le corresponden a cada área. Deliberadamente NO se acota por período: es
+ * un snapshot del backlog actual por área, no un indicador del mes.
  */
 export async function getOpenRequestsByResponsibleArea(): Promise<ResponsibleAreaSummary> {
   const grouped = await db.maintenanceRequest.groupBy({

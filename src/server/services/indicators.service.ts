@@ -3,18 +3,18 @@ import { classifyEstado } from "@/lib/estado";
 import { getPeriodRange, getPreviousPeriod, MONTH_LABELS, type Period } from "@/lib/period";
 import type { Prisma } from "@/generated/prisma/client";
 import {
-  getDistinctEstados,
+  getNonAtendidaEstadoWhere,
   type DashboardStats,
 } from "@/server/services/maintenance-requests.service";
 
 /**
  * Indicadores acotados a un período (año/mes) en lugar de todo el histórico.
- * Comparte `classifyEstado` con el dashboard/KPI existentes (misma fuente de
- * verdad para "qué es Pendiente/En espera/Atendida"), pero cada consulta
- * acá está acotada explícitamente por FECHA — nunca reutiliza las funciones
- * de `maintenance-requests.service.ts` que trabajan sobre "sinceDays" u
- * "todo el histórico", para no arriesgar ese código ya usado por el
- * dashboard principal.
+ * Comparte `classifyEstado` con el Dashboard (misma fuente de verdad para
+ * "qué es Pendiente/En espera/Atendida"), y comparte con él también la
+ * definición de "abierta" (`getNonAtendidaEstadoWhere`, en
+ * maintenance-requests.service.ts) para que Dashboard e Indicadores nunca
+ * diverjan sobre qué cuenta como backlog. Cada consulta acá está acotada
+ * explícitamente por FECHA al período recibido.
  */
 
 /** Años reales con al menos una Solicitud (FECHA no nula), para el filtro. */
@@ -70,15 +70,6 @@ async function computeStatsForWhere(
 /** Estadísticas reales (mismo shape que el dashboard) acotadas a [start, end). */
 export function getPeriodStats(start: Date, end: Date): Promise<DashboardStats> {
   return computeStatsForWhere({ fecha: { gte: start, lt: end } });
-}
-
-async function getNonAtendidaEstadoWhere(): Promise<Prisma.MaintenanceRequestWhereInput> {
-  const distinctEstados = await getDistinctEstados();
-  const nonAtendida = distinctEstados.filter((estado) => classifyEstado(estado).bucket !== "atendida");
-  // "otro" (estado null) también cuenta como no resuelta — igual que en el dashboard.
-  return nonAtendida.length > 0
-    ? { OR: [{ estado: { in: nonAtendida } }, { estado: null }] }
-    : { estado: null };
 }
 
 /**
