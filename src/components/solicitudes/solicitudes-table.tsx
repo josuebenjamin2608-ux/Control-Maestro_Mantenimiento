@@ -14,12 +14,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatCalendarDate } from "@/lib/dates";
 import { daysSince } from "@/lib/estado";
 import type { listMaintenanceRequests } from "@/server/services/maintenance-requests.service";
 
 type SolicitudRow = Awaited<ReturnType<typeof listMaintenanceRequests>>["items"][number];
-
-const dateFormatter = new Intl.DateTimeFormat("es", { dateStyle: "medium" });
 
 /**
  * `compact` omite Antigüedad y Minutas (usado en la vista previa embebida
@@ -82,7 +81,7 @@ export function SolicitudesTable({
             <div className="flex items-center justify-between gap-2 text-sm text-muted-foreground">
               <span className="truncate">{request.maquina ?? "—"}</span>
               <span className="shrink-0 whitespace-nowrap">
-                {request.fecha ? dateFormatter.format(request.fecha) : "—"}
+                {formatCalendarDate(request.fecha)}
               </span>
             </div>
             {request.problema ? (
@@ -134,7 +133,7 @@ export function SolicitudesTable({
                     {request.problema ?? "—"}
                   </TableCell>
                   <TableCell className="whitespace-nowrap">
-                    {request.fecha ? dateFormatter.format(request.fecha) : "—"}
+                    {formatCalendarDate(request.fecha)}
                   </TableCell>
                   {compact ? null : (
                     <TableCell className="whitespace-nowrap text-muted-foreground">

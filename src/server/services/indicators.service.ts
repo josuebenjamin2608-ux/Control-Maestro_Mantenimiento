@@ -25,7 +25,10 @@ export async function getAvailableYears(): Promise<number[]> {
   });
   const years = new Set<number>();
   for (const row of rows) {
-    if (row.fecha) years.add(row.fecha.getFullYear());
+    // getUTCFullYear (no getFullYear): FECHA se almacena como medianoche
+    // UTC del día calendario, así que el año debe leerse en UTC para no
+    // depender de la zona horaria del proceso.
+    if (row.fecha) years.add(row.fecha.getUTCFullYear());
   }
   const currentYear = new Date().getFullYear();
   years.add(currentYear); // el año actual siempre debe poder seleccionarse, incluso sin datos todavía
@@ -186,7 +189,8 @@ export async function getMonthlyCountsForYear(year: number): Promise<MonthPoint[
 
   const counts = new Array(12).fill(0) as number[];
   for (const row of rows) {
-    if (row.fecha) counts[row.fecha.getMonth()] += 1;
+    // getUTCMonth (no getMonth): mismo motivo que getUTCFullYear arriba.
+    if (row.fecha) counts[row.fecha.getUTCMonth()] += 1;
   }
 
   return counts.map((count, index) => ({ month: index + 1, label: MONTH_LABELS[index], count }));

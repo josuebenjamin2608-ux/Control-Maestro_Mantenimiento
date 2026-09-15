@@ -18,10 +18,17 @@ export interface Period {
   month: number;
 }
 
-/** [start, end) del mes calendario dado, en hora local del servidor. */
+/**
+ * [start, end) del mes calendario dado, anclado a UTC — igual que FECHA de
+ * Solicitud, que se almacena como medianoche UTC del día calendario (ver
+ * `src/lib/dates.ts`). Usar `Date.UTC` explícitamente (en vez de
+ * `new Date(year, month, day)`, que interpreta en hora local del proceso)
+ * evita que este rango se desplace si el proceso corre en una zona horaria
+ * distinta de UTC.
+ */
 export function getPeriodRange(year: number, month: number): { start: Date; end: Date } {
-  const start = new Date(year, month - 1, 1);
-  const end = new Date(year, month, 1);
+  const start = new Date(Date.UTC(year, month - 1, 1));
+  const end = new Date(Date.UTC(year, month, 1));
   return { start, end };
 }
 

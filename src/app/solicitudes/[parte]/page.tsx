@@ -18,13 +18,12 @@ import {
   getMaintenanceRequestByParte,
   listTechnicians,
 } from "@/server/services/maintenance-requests.service";
+import { formatCalendarDate } from "@/lib/dates";
 import { sanitizeInternalPath } from "@/lib/safe-url";
 
 // Consulta la base de datos: debe resolverse en cada request, no se puede
 // pre-renderizar en build.
 export const dynamic = "force-dynamic";
-
-const dateFormatter = new Intl.DateTimeFormat("es", { dateStyle: "medium" });
 
 /** Etiqueta contextual según el origen real (?back=...), nunca window.history. */
 function backLinkLabel(back: string | null): string {
@@ -119,10 +118,7 @@ export default async function SolicitudDetailPage({
             <div>
               <SectionLabel>Solicitud</SectionLabel>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                <Field
-                  label="Fecha de solicitud"
-                  value={request.fecha ? dateFormatter.format(request.fecha) : null}
-                />
+                <Field label="Fecha de solicitud" value={formatCalendarDate(request.fecha)} />
                 <Field label="Empleado solicitante" value={request.empleado} />
                 <Field label="Código de empleado" value={request.codemple} />
               </div>
