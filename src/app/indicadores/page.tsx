@@ -139,6 +139,12 @@ export default async function IndicadoresPage({
           <div className="flex flex-col gap-1.5">
             <KpiRow stats={stats} closedTasks={closedTasks} />
             <p className="text-xs text-muted-foreground">
+              Pendientes/En espera/Atendidas aquí cuentan solo solicitudes con FECHA dentro del
+              período seleccionado — un concepto distinto de las tarjetas &quot;Pendientes&quot;/&quot;En
+              espera&quot; del Panel de control, que muestran el total abierto (ESTADO != Realizado) sin
+              importar la fecha. Ambas cifras son correctas; miden cosas distintas.
+            </p>
+            <p className="text-xs text-muted-foreground">
               Cerradas: solicitudes cuyas Minutas relacionadas registran FECHAFIN dentro del período
               (última finalización cuando hay varias). Según cierres registrados en Minutas.
             </p>

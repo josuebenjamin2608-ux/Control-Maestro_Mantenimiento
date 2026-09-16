@@ -86,8 +86,14 @@ export async function confirmMaintenanceRequestFile(
     rows: parseResult.data.rows,
   });
 
+  // Importar Solicitudes cambia los KPI de ambas vistas operativas: Dashboard
+  // (getOpenBucketCounts/getPeriodStats) e Indicadores (getPeriodStats y
+  // demás consultas de indicators.service.ts). Sin revalidar "/indicadores"
+  // acá, su Router Cache de cliente podía servir un payload desactualizado
+  // tras navegar desde el Panel de control justo después de importar.
   revalidatePath("/importaciones");
   revalidatePath("/solicitudes");
+  revalidatePath("/indicadores");
   revalidatePath("/");
 
   return {
@@ -153,8 +159,12 @@ export async function confirmMaintenanceLogFile(
     rows: parseResult.data.rows,
   });
 
+  // Importar Minutas puede relacionar Solicitudes existentes (cambia
+  // "Cerradas" en Indicadores y el detalle de /solicitudes/[parte]) — mismo
+  // motivo que en confirmMaintenanceRequestFile arriba.
   revalidatePath("/importaciones");
   revalidatePath("/solicitudes");
+  revalidatePath("/indicadores");
   revalidatePath("/");
 
   return { ok: true, data: { importBatchId: result.importBatchId } };

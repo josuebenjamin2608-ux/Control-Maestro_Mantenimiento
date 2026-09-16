@@ -36,8 +36,12 @@ export async function setMaintenanceRequestResponsibleArea(
     data: { responsibleArea: area },
   });
 
+  // El área responsable alimenta "Distribución por responsable" tanto en el
+  // Dashboard como en Indicadores — sin esto, Indicadores podía quedar
+  // desactualizado tras un cambio hecho desde la ficha de la solicitud.
   revalidatePath(`/solicitudes/${encodeURIComponent(request.parte)}`);
   revalidatePath("/solicitudes");
+  revalidatePath("/indicadores");
   revalidatePath("/");
   return { ok: true, data: null };
 }
