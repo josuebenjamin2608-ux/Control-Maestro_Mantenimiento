@@ -8,7 +8,7 @@ import { EstadoDistribution } from "@/components/indicadores/estado-distribution
 import { IndicatorModalProvider } from "@/components/indicadores/indicator-modal-context";
 import { KpiRow } from "@/components/indicadores/kpi-row";
 import { MachineHighlights } from "@/components/indicadores/machine-highlights";
-import { OpenTasksButton } from "@/components/indicadores/open-tasks-button";
+import { OpenTasksSection } from "@/components/indicadores/open-tasks-section";
 import { OperatorHighlights } from "@/components/indicadores/operator-highlights";
 import { PeriodFilterBar } from "@/components/indicadores/period-filter-bar";
 import { ResponsibleAreaDistribution } from "@/components/indicadores/responsible-area-distribution";
@@ -164,11 +164,6 @@ export default async function IndicadoresPage({
               >
                 Año actual
               </Link>
-              <OpenTasksButton
-                counts={openCounts}
-                responsibleArea={openResponsibleAreaData}
-                backHref={currentIndicadoresHref}
-              />
             </div>
           </div>
 
@@ -202,6 +197,19 @@ export default async function IndicadoresPage({
               Solicitudes abiertas actualmente, sin importar el mes en que fueron creadas.
             </p>
             <CurrentStateRow counts={openCounts} />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <h3 className="text-sm font-semibold text-foreground">Tareas abiertas</h3>
+            <p className="text-xs text-muted-foreground">
+              Mismo backlog operativo que &quot;Estado actual de la operación&quot;: solicitudes con
+              ESTADO != Realizado, sin importar la fecha en que fueron creadas.
+            </p>
+            <OpenTasksSection
+              counts={openCounts}
+              responsibleArea={openResponsibleAreaData}
+              backHref={currentIndicadoresHref}
+            />
           </div>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

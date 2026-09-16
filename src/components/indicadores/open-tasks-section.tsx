@@ -5,7 +5,7 @@ import Link from "next/link";
 import { AlertTriangle, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 
 import { EstadoBadge } from "@/components/solicitudes/estado-badge";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ESTADO_BUCKET_LABELS } from "@/lib/estado";
 import { formatCalendarDate } from "@/lib/dates";
@@ -40,11 +40,15 @@ function technicianLabel(row: IndicatorRequestRow): string {
 type FetchResult = { page: IndicatorRequestsPage } | { error: string };
 
 /**
- * Cuerpo del panel, montado solo mientras el diálogo está abierto (se
- * remonta cada vez que se abre, así la paginación arranca en 0 sin un
- * efecto que la reinicie — mismo patrón que IndicatorModalBody).
+ * "Tareas abiertas": sección SIEMPRE visible dentro de /indicadores, ya no un
+ * modal — reutiliza exactamente la misma consulta que antes vivía en el
+ * diálogo (indicator "totalAbierto" → getNonAtendidaEstadoWhere, mismo
+ * universo ESTADO != Realizado que "Estado actual de la operación") y los
+ * mismos `counts`/`responsibleArea` que la página ya calcula (no se agrega
+ * ninguna consulta nueva). La tabla se pide al montar el componente (antes
+ * se pedía al abrir el diálogo) — misma paginación cliente de siempre.
  */
-function OpenTasksDialogBody({
+export function OpenTasksSection({
   counts,
   responsibleArea,
   backHref,
@@ -90,15 +94,8 @@ function OpenTasksDialogBody({
   const responsableTotal = responsibleArea.mantenimiento + responsibleArea.produccion;
 
   return (
-    <DialogContent className="w-[90vw] max-w-[1400px] max-h-[85vh]">
-      <DialogHeader>
-        <DialogTitle>Tareas abiertas</DialogTitle>
-        <DialogDescription>
-          Solicitudes con ESTADO != Realizado, sin importar la fecha en que fueron creadas.
-        </DialogDescription>
-      </DialogHeader>
-
-      <div className="flex flex-1 flex-col overflow-y-auto">
+    <Card>
+      <CardContent className="flex flex-col gap-0 px-0 py-0">
         <div className="flex flex-col gap-4 border-b border-border px-5 py-4">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="flex flex-col gap-1 rounded-md border border-border px-3 py-2.5">
@@ -180,17 +177,17 @@ function OpenTasksDialogBody({
         </div>
 
         {isLoading ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
+          <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
             <Loader2 className="size-5 animate-spin" />
             <p className="text-sm">Cargando tareas abiertas...</p>
           </div>
         ) : error ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12 text-center">
+          <div className="flex flex-col items-center justify-center gap-2 py-12 text-center">
             <AlertTriangle className="size-5 text-destructive" />
             <p className="text-sm text-foreground">{error}</p>
           </div>
         ) : page && page.items.length === 0 ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-1 py-12 text-center">
+          <div className="flex flex-col items-center justify-center gap-1 py-12 text-center">
             <p className="text-sm text-foreground">No hay tareas abiertas actualmente.</p>
           </div>
         ) : page ? (
@@ -202,7 +199,7 @@ function OpenTasksDialogBody({
               {page.total} tarea{page.total === 1 ? "" : "s"} abierta{page.total === 1 ? "" : "s"}
             </div>
 
-            <div className="flex-1 overflow-y-auto">
+            <div className="max-h-[32rem] overflow-y-auto">
               {/* Móvil: tarjetas. */}
               <div className="flex flex-col divide-y divide-border sm:hidden">
                 {page.items.map((row) => (
@@ -323,45 +320,7 @@ function OpenTasksDialogBody({
             ) : null}
           </>
         ) : null}
-      </div>
-    </DialogContent>
-  );
-}
-
-/**
- * Botón "Tareas abiertas": abre un panel propio, independiente del período
- * seleccionado en /indicadores (no usa IndicatorModalProvider ni toca
- * year/month) — TODAS las solicitudes con ESTADO != Realizado, sin filtro
- * de FECHA. `counts`/`responsibleArea` llegan ya calculados desde la página
- * (mismas getOpenBucketCounts/getOpenRequestsByResponsibleArea que ya usan
- * el Dashboard y "Estado actual de la operación" — no se duplica esa
- * consulta) y la tabla se pide bajo demanda solo al abrir el panel.
- */
-export function OpenTasksButton({
-  counts,
-  responsibleArea,
-  backHref,
-}: {
-  counts: OpenBucketCounts;
-  responsibleArea: ResponsibleAreaSummary;
-  backHref: string;
-}) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="flex h-9 items-center rounded-md border border-input bg-background px-3 text-sm text-foreground hover:bg-secondary"
-      >
-        Tareas abiertas
-      </button>
-      <Dialog open={open} onOpenChange={setOpen}>
-        {open ? (
-          <OpenTasksDialogBody counts={counts} responsibleArea={responsibleArea} backHref={backHref} />
-        ) : null}
-      </Dialog>
-    </>
+      </CardContent>
+    </Card>
   );
 }
