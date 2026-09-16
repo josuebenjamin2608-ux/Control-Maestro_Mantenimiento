@@ -33,7 +33,8 @@ export function YearMonthlyChart({
 }: {
   data: MonthPoint[];
   year: number;
-  highlightMonth: number;
+  /** Ausente cuando se está viendo el año completo — ningún mes se resalta. */
+  highlightMonth?: number;
 }) {
   const { openIndicator } = useIndicatorModal();
   const max = Math.max(...data.map((point) => point.count), 1);

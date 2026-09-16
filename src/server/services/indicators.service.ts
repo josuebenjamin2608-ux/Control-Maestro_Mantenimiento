@@ -250,13 +250,25 @@ export interface MonthPoint {
 }
 
 /**
+ * [start, end) del AÑO calendario completo del año dado (01/01 00:00 UTC a
+ * 01/01 00:00 UTC del año siguiente) — se compone reutilizando
+ * `getPeriodRange` dos veces (mismo patrón que ya usaba esta función más
+ * abajo), nunca una segunda lógica de fechas. Es el rango que usa el modo
+ * "Año actual" de /indicadores.
+ */
+export function getYearPeriodRange(year: number): { start: Date; end: Date } {
+  const { start } = getPeriodRange(year, 1);
+  const { start: end } = getPeriodRange(year + 1, 1);
+  return { start, end };
+}
+
+/**
  * Solicitudes por mes del año calendario dado (Enero-Diciembre). Los meses
  * sin datos reales simplemente cuentan 0 — nunca se inventa un valor para
  * un mes futuro o sin registros.
  */
 export async function getMonthlyCountsForYear(year: number): Promise<MonthPoint[]> {
-  const { start } = getPeriodRange(year, 1);
-  const { start: end } = getPeriodRange(year + 1, 1);
+  const { start, end } = getYearPeriodRange(year);
 
   const rows = await db.maintenanceRequest.findMany({
     where: { fecha: { gte: start, lt: end } },
@@ -392,13 +404,24 @@ export type IndicatorKind =
   | "backlogOver30"
   | "maquina"
   | "responsable"
-  | "operario";
+  | "operario"
+  /** "Estado actual de la operación": TODAS las fechas, ESTADO != Realizado. Ver getNonAtendidaEstadoWhere. */
+  | "totalAbierto"
+  /** Un bucket de classifyEstado, pero TODAS las fechas (no acotado al período) — la contraparte de "estado" para "Estado actual de la operación". */
+  | "estadoActual";
 
 export interface GetIndicatorRequestsParams {
   indicator: IndicatorKind;
   year: number;
-  month: number;
-  /** Requerido cuando indicator === "estado" (pendiente/espera/programada/atendida/otro). */
+  /**
+   * Mes del período (1-12). Si se omite, el período es el AÑO CALENDARIO
+   * COMPLETO de `year` (modo "Año actual" de /indicadores — ver
+   * getYearPeriodRange). Ignorado por los indicadores independientes del
+   * período ("totalAbierto", "estadoActual" y los backlogOver7/15/30, que
+   * siempre son relativos a la fecha actual del sistema).
+   */
+  month?: number;
+  /** Requerido cuando indicator === "estado" o "estadoActual" (pendiente/espera/programada/atendida/otro). */
   bucket?: EstadoBucket;
   /** Requerido cuando indicator === "maquina": valor exacto de MAQUINA. */
   maquina?: string;
@@ -555,7 +578,10 @@ export async function getIndicatorRequests(
     take = 20,
     skip = 0,
   } = params;
-  const { start, end } = getPeriodRange(year, month);
+  // Sin `month`: año calendario completo (modo "Año actual") — misma
+  // composición de getPeriodRange que usa getYearPeriodRange, nunca una
+  // segunda lógica de fechas.
+  const { start, end } = month !== undefined ? getPeriodRange(year, month) : getYearPeriodRange(year);
   const periodWhere: Prisma.MaintenanceRequestWhereInput = { fecha: { gte: start, lt: end } };
 
   switch (indicator) {
@@ -629,6 +655,23 @@ export async function getIndicatorRequests(
     case "operario": {
       const ids = await getOperatorRequestIds(start, end, { codemple, empleado, operarioSinDefinir });
       return findIndicatorPage({ id: { in: ids } }, take, skip);
+    }
+
+    case "totalAbierto": {
+      // "Estado actual de la operación": ESTADO != Realizado, SIN filtro de
+      // FECHA — mismo universo que getOpenBucketCounts().totalAbiertas
+      // (maintenance-requests.service.ts), nunca una definición aparte.
+      const estadoWhere = await getNonAtendidaEstadoWhere();
+      return findIndicatorPage(estadoWhere, take, skip);
+    }
+
+    case "estadoActual": {
+      if (!bucket) throw new Error("getIndicatorRequests: falta 'bucket' para indicator 'estadoActual'.");
+      // Mismo bucket que "estado", pero SIN periodWhere — la contraparte de
+      // getOpenBucketCounts() para un bucket específico (Pendientes/En
+      // espera/Programadas de "Estado actual de la operación").
+      const estadoWhere = await getEstadoWhereForBucket(bucket);
+      return findIndicatorPage(estadoWhere, take, skip);
     }
 
     default: {

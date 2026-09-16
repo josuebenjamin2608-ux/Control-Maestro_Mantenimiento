@@ -92,7 +92,8 @@ function IndicatorModalBody({
 }: {
   descriptor: IndicatorDescriptor;
   year: number;
-  month: number;
+  /** Ausente en modo "Año actual" — se pide el indicador sobre el año completo, salvo que el descriptor traiga su propio periodOverride. */
+  month?: number;
   periodLabel: string;
   backHref: string;
 }) {
@@ -302,7 +303,8 @@ export function IndicatorDetailModal({
 }: {
   descriptor: IndicatorDescriptor | null;
   year: number;
-  month: number;
+  /** Ausente en modo "Año actual" (ver /indicadores). */
+  month?: number;
   periodLabel: string;
   /** URL exacta de /indicadores con sus filtros actuales, para que "Volver" desde el detalle regrese acá. */
   backHref: string;

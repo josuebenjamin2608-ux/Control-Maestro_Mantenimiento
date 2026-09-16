@@ -6,9 +6,15 @@ import { cn } from "@/lib/utils";
 import { useIndicatorModal } from "./indicator-modal-context";
 import type { IndicatorDescriptor } from "./indicator-detail-modal";
 
-type Tone = "default" | "destructive" | "warning" | "primary" | "success";
+export type KpiTileTone = "default" | "destructive" | "warning" | "primary" | "success";
 
-function Tile({
+/**
+ * Tarjeta clickeable de una sola cifra — bloque visual compartido por
+ * KpiRow (KPIs del período) y CurrentStateRow (Estado actual de la
+ * operación), para que ambas secciones se vean consistentes sin duplicar
+ * el markup del botón/tarjeta.
+ */
+export function KpiTile({
   label,
   value,
   tone,
@@ -17,16 +23,16 @@ function Tile({
 }: {
   label: string;
   value: string;
-  tone: Tone;
+  tone: KpiTileTone;
   descriptor: IndicatorDescriptor;
   /**
    * Aclara el alcance temporal exacto de esta cifra. Necesario porque
-   * Pendientes/En espera en el Dashboard son "abiertas, todas las fechas"
-   * (ESTADO != Realizado, sin filtro de FECHA — estado operativo actual),
-   * mientras que acá son "dentro del período" (FECHA en el rango
-   * seleccionado, vía getPeriodStats) — dos definiciones legítimamente
-   * distintas que comparten el mismo nombre visual, así que nunca deben
-   * coincidir numéricamente salvo coincidencia.
+   * Pendientes/En espera en el Dashboard (y en "Estado actual de la
+   * operación") son "abiertas, todas las fechas" (ESTADO != Realizado, sin
+   * filtro de FECHA), mientras que en los KPI del período son "dentro del
+   * período seleccionado" (vía getPeriodStats) — dos definiciones
+   * legítimamente distintas que comparten el mismo nombre visual, así que
+   * nunca deben coincidir numéricamente salvo coincidencia.
    */
   caption: string;
 }) {
@@ -68,35 +74,35 @@ export function KpiRow({ stats, closedTasks }: { stats: DashboardStats; closedTa
 
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-      <Tile
+      <KpiTile
         label="Solicitudes"
         value={String(stats.total)}
         tone="default"
         caption="Con FECHA en el período"
         descriptor={{ title: "Solicitudes del período", query: { indicator: "solicitudes" } }}
       />
-      <Tile
+      <KpiTile
         label="Pendientes"
         value={String(stats.pendientes)}
         tone="destructive"
         caption="Con FECHA en el período (no el total abierto)"
         descriptor={{ title: "Pendientes", query: { indicator: "estado", bucket: "pendiente" } }}
       />
-      <Tile
+      <KpiTile
         label="En espera"
         value={String(stats.espera)}
         tone="warning"
         caption="Con FECHA en el período (no el total abierto)"
         descriptor={{ title: "En espera", query: { indicator: "estado", bucket: "espera" } }}
       />
-      <Tile
+      <KpiTile
         label="Atendidas"
         value={String(stats.atendidas)}
         tone="success"
         caption="Con FECHA en el período"
         descriptor={{ title: "Atendidas", query: { indicator: "estado", bucket: "atendida" } }}
       />
-      <Tile
+      <KpiTile
         label="% Atendidas"
         value={`${percentage}%`}
         tone="primary"
@@ -107,7 +113,7 @@ export function KpiRow({ stats, closedTasks }: { stats: DashboardStats; closedTa
           query: { indicator: "pctAtendidas" },
         }}
       />
-      <Tile
+      <KpiTile
         label="Cerradas"
         value={String(closedTasks)}
         tone="default"

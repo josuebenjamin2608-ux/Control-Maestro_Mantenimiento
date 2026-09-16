@@ -33,7 +33,8 @@ export function IndicatorModalProvider({
   children,
 }: {
   year: number;
-  month: number;
+  /** Ausente en modo "Año actual" (ver /indicadores) — el indicador se calcula sobre el año completo. */
+  month?: number;
   periodLabel: string;
   backHref: string;
   children: ReactNode;

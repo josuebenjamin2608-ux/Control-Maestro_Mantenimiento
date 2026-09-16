@@ -3,6 +3,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/layout/app-shell";
 import { InteractiveBacklogCard } from "@/components/indicadores/backlog-card-interactive";
 import { ComparisonCard } from "@/components/indicadores/comparison-card";
+import { CurrentStateRow } from "@/components/indicadores/current-state-row";
 import { EstadoDistribution } from "@/components/indicadores/estado-distribution";
 import { IndicatorModalProvider } from "@/components/indicadores/indicator-modal-context";
 import { KpiRow } from "@/components/indicadores/kpi-row";
@@ -30,8 +31,10 @@ import {
   getPeriodStats,
   getPreviousPeriodOf,
   getResponsibleAreaDistributionForPeriod,
+  getYearPeriodRange,
   type PeriodSnapshot,
 } from "@/server/services/indicators.service";
+import { getOpenBucketCounts } from "@/server/services/maintenance-requests.service";
 
 // Consulta la base de datos: debe resolverse en cada request, no se puede
 // pre-renderizar en build.
@@ -39,6 +42,11 @@ export const dynamic = "force-dynamic";
 
 function buildIndicadoresHref(year: number, month: number) {
   return `/indicadores?year=${year}&month=${month}`;
+}
+
+/** Modo "Año actual": mismo path, pero SIN `month` — así se distingue de un mes inválido (que cae de vuelta al mes actual). */
+function buildIndicadoresYearHref(year: number) {
+  return `/indicadores?year=${year}`;
 }
 
 export default async function IndicadoresPage({
@@ -55,16 +63,24 @@ export default async function IndicadoresPage({
   const years = await getAvailableYears();
 
   const parsedYear = yearParam ? Number(yearParam) : currentYear;
-  const parsedMonth = monthParam ? Number(monthParam) : currentMonth;
-
   const selectedYear =
     Number.isInteger(parsedYear) && parsedYear > 1900 && parsedYear < 2200 ? parsedYear : currentYear;
+
+  // "Año actual" navega a `?year=X` SIN `month` — esa ausencia (no un mes
+  // inválido, que cae de vuelta al mes actual) es la que activa el modo año
+  // completo. Ver buildIndicadoresYearHref.
+  const isYearMode = monthParam === undefined;
+
+  const parsedMonth = monthParam ? Number(monthParam) : currentMonth;
   const selectedMonth =
     Number.isInteger(parsedMonth) && parsedMonth >= 1 && parsedMonth <= 12 ? parsedMonth : currentMonth;
 
   const period: Period = { year: selectedYear, month: selectedMonth };
   const previousPeriod = getPreviousPeriodOf(period);
-  const { start, end } = getPeriodRange(selectedYear, selectedMonth);
+  // Año completo: [01/01 00:00 UTC, 01/01 año siguiente 00:00 UTC) — misma
+  // composición de getPeriodRange que usa getYearPeriodRange, nunca una
+  // segunda lógica de fechas UTC.
+  const { start, end } = isYearMode ? getYearPeriodRange(selectedYear) : getPeriodRange(selectedYear, selectedMonth);
 
   const [
     stats,
@@ -75,6 +91,7 @@ export default async function IndicadoresPage({
     monthlyData,
     previousSnapshot,
     responsibleAreaData,
+    openCounts,
   ] = await Promise.all([
     getPeriodStats(start, end),
     getClosedTasksForPeriod(start, end),
@@ -82,25 +99,35 @@ export default async function IndicadoresPage({
     getMachineDistributionForPeriod(start, end, 10),
     getOperatorDistributionForPeriod(start, end, 10),
     getMonthlyCountsForYear(selectedYear),
-    getPeriodSnapshot(previousPeriod),
+    // "Mes anterior" no tiene un equivalente claro en modo año completo — se
+    // omite la consulta y la tarjeta de comparación no se muestra (ver más abajo).
+    isYearMode ? Promise.resolve(null) : getPeriodSnapshot(previousPeriod),
     getResponsibleAreaDistributionForPeriod(start, end),
+    // "Estado actual de la operación": ESTADO != Realizado, SIN filtro de
+    // FECHA — independiente del período seleccionado (misma fuente que el
+    // Dashboard, ver maintenance-requests.service.ts).
+    getOpenBucketCounts(),
   ]);
+
+  const periodLabel = isYearMode ? `Año ${selectedYear} completo` : formatPeriodLabel(period);
 
   const currentSnapshot: PeriodSnapshot = {
     period,
-    label: formatPeriodLabel(period),
+    label: periodLabel,
     stats,
     closedTasks,
   };
 
   const isEmpty = stats.total === 0;
-  const currentIndicadoresHref = buildIndicadoresHref(selectedYear, selectedMonth);
+  const currentIndicadoresHref = isYearMode
+    ? buildIndicadoresYearHref(selectedYear)
+    : buildIndicadoresHref(selectedYear, selectedMonth);
 
   return (
     <AppShell title="Indicadores">
       <IndicatorModalProvider
         year={selectedYear}
-        month={selectedMonth}
+        month={isYearMode ? undefined : selectedMonth}
         periodLabel={currentSnapshot.label}
         backHref={currentIndicadoresHref}
       >
@@ -120,7 +147,7 @@ export default async function IndicadoresPage({
                 Mes actual
               </Link>
               <Link
-                href={buildIndicadoresHref(currentYear, selectedMonth)}
+                href={buildIndicadoresYearHref(currentYear)}
                 className="flex h-9 items-center rounded-md border border-input bg-background px-3 text-sm text-foreground hover:bg-secondary"
               >
                 Año actual
@@ -137,12 +164,14 @@ export default async function IndicadoresPage({
           ) : null}
 
           <div className="flex flex-col gap-1.5">
+            <h3 className="text-sm font-semibold text-foreground">Indicadores del período</h3>
             <KpiRow stats={stats} closedTasks={closedTasks} />
             <p className="text-xs text-muted-foreground">
-              Pendientes/En espera/Atendidas aquí cuentan solo solicitudes con FECHA dentro del
-              período seleccionado — un concepto distinto de las tarjetas &quot;Pendientes&quot;/&quot;En
-              espera&quot; del Panel de control, que muestran el total abierto (ESTADO != Realizado) sin
-              importar la fecha. Ambas cifras son correctas; miden cosas distintas.
+              Los KPI de arriba cuentan solo solicitudes con FECHA dentro del período seleccionado
+              ({periodLabel}). Es un concepto distinto de &quot;Estado actual de la operación&quot; (abajo) y
+              de las tarjetas &quot;Pendientes&quot;/&quot;En espera&quot; del Panel de control, que muestran el total
+              abierto (ESTADO != Realizado) sin importar la fecha. Todas las cifras son correctas;
+              miden cosas distintas.
             </p>
             <p className="text-xs text-muted-foreground">
               Cerradas: solicitudes cuyas Minutas relacionadas registran FECHAFIN dentro del período
@@ -150,14 +179,28 @@ export default async function IndicadoresPage({
             </p>
           </div>
 
+          <div className="flex flex-col gap-1.5">
+            <h3 className="text-sm font-semibold text-foreground">Estado actual de la operación</h3>
+            <p className="text-xs text-muted-foreground">
+              Solicitudes abiertas actualmente, sin importar el mes en que fueron creadas.
+            </p>
+            <CurrentStateRow counts={openCounts} />
+          </div>
+
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-base text-foreground">Solicitudes por mes — {selectedYear}</CardTitle>
-                <CardDescription>El mes seleccionado se resalta.</CardDescription>
+                <CardDescription>
+                  {isYearMode ? "Vista del año completo." : "El mes seleccionado se resalta."}
+                </CardDescription>
               </CardHeader>
               <CardContent>
-                <YearMonthlyChart data={monthlyData} year={selectedYear} highlightMonth={selectedMonth} />
+                <YearMonthlyChart
+                  data={monthlyData}
+                  year={selectedYear}
+                  highlightMonth={isYearMode ? undefined : selectedMonth}
+                />
               </CardContent>
             </Card>
 
@@ -216,14 +259,16 @@ export default async function IndicadoresPage({
             </Card>
           </div>
 
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base text-foreground">Comparación con el mes anterior</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ComparisonCard current={currentSnapshot} previous={previousSnapshot} />
-            </CardContent>
-          </Card>
+          {!isYearMode && previousSnapshot ? (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base text-foreground">Comparación con el mes anterior</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ComparisonCard current={currentSnapshot} previous={previousSnapshot} />
+              </CardContent>
+            </Card>
+          ) : null}
         </div>
       </IndicatorModalProvider>
     </AppShell>
