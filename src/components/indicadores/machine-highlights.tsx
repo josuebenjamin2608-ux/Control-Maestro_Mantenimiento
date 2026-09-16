@@ -1,9 +1,18 @@
+"use client";
+
 import { Trophy } from "lucide-react";
 
 import type { MachinePeriodItem } from "@/server/services/indicators.service";
+import { useIndicatorModal } from "./indicator-modal-context";
 
-/** Máquina #1 destacada + resto del Top 10 como barras horizontales proporcionales. */
+function machineDescriptor(maquina: string) {
+  return { title: `Máquina — ${maquina}`, query: { indicator: "maquina" as const, maquina } };
+}
+
+/** Máquina #1 destacada + resto del Top 10 como barras horizontales proporcionales. Cada una abre el detalle de sus solicitudes del período. */
 export function MachineHighlights({ items }: { items: MachinePeriodItem[] }) {
+  const { openIndicator } = useIndicatorModal();
+
   if (items.length === 0) {
     return <p className="text-sm text-muted-foreground">Sin solicitudes en este período.</p>;
   }
@@ -13,7 +22,11 @@ export function MachineHighlights({ items }: { items: MachinePeriodItem[] }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-3 rounded-md border border-warning/30 bg-warning/10 px-4 py-3">
+      <button
+        type="button"
+        onClick={() => openIndicator(machineDescriptor(top.maquina))}
+        className="flex w-full items-center gap-3 rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-left cursor-pointer transition-colors hover:border-warning/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
         <Trophy className="size-5 shrink-0 text-warning" />
         <div className="flex min-w-0 flex-col">
           <span className="truncate text-sm font-semibold text-foreground">{top.maquina}</span>
@@ -21,12 +34,17 @@ export function MachineHighlights({ items }: { items: MachinePeriodItem[] }) {
             {top.count} solicitud{top.count === 1 ? "" : "es"} · {top.percentage.toFixed(1)}% del total
           </span>
         </div>
-      </div>
+      </button>
 
       {rest.length > 0 ? (
         <div className="flex flex-col gap-2.5">
           {rest.map((item, index) => (
-            <div key={item.maquina} className="flex items-center gap-3">
+            <button
+              key={item.maquina}
+              type="button"
+              onClick={() => openIndicator(machineDescriptor(item.maquina))}
+              className="flex w-full items-center gap-3 rounded-md py-0.5 text-left cursor-pointer transition-colors hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
               <span className="w-4 shrink-0 text-right text-xs text-muted-foreground">{index + 2}</span>
               <span
                 className="w-24 shrink-0 truncate text-xs text-foreground sm:w-40"
@@ -43,7 +61,7 @@ export function MachineHighlights({ items }: { items: MachinePeriodItem[] }) {
               <span className="w-8 shrink-0 text-right text-xs font-medium text-foreground">
                 {item.count}
               </span>
-            </div>
+            </button>
           ))}
         </div>
       ) : null}

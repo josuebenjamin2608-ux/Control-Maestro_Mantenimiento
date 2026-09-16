@@ -1,8 +1,10 @@
 import { db } from "@/lib/db";
-import { classifyEstado } from "@/lib/estado";
+import { classifyEstado, type EstadoBucket } from "@/lib/estado";
 import { getPeriodRange, getPreviousPeriod, MONTH_LABELS, type Period } from "@/lib/period";
-import type { Prisma } from "@/generated/prisma/client";
+import { RESPONSIBLE_AREA_UNDEFINED_VALUE } from "@/lib/responsible-area";
+import type { MaintenanceRequestResponsibleArea, Prisma } from "@/generated/prisma/client";
 import {
+  getEstadoWhereForBucket,
   getNonAtendidaEstadoWhere,
   type DashboardStats,
 } from "@/server/services/maintenance-requests.service";
@@ -200,7 +202,7 @@ export async function getMonthlyCountsForYear(year: number): Promise<MonthPoint[
  * inventa un cierre para una Solicitud sin Minutas relacionadas con
  * FECHAFIN real.
  */
-export async function getClosedTasksForPeriod(start: Date, end: Date): Promise<number> {
+async function getClosedRequestIdsForPeriod(start: Date, end: Date): Promise<string[]> {
   const relatedLogs = await db.maintenanceLog.findMany({
     where: { relationStatus: "RELATED", fechafin: { not: null }, maintenanceRequestId: { not: null } },
     select: { maintenanceRequestId: true, fechafin: true },
@@ -215,11 +217,17 @@ export async function getClosedTasksForPeriod(start: Date, end: Date): Promise<n
     }
   }
 
-  let count = 0;
-  for (const fechafin of latestFechafinByRequest.values()) {
-    if (fechafin >= start && fechafin < end) count += 1;
+  const closed: { id: string; fechafin: Date }[] = [];
+  for (const [id, fechafin] of latestFechafinByRequest.entries()) {
+    if (fechafin >= start && fechafin < end) closed.push({ id, fechafin });
   }
-  return count;
+  // Cierre más reciente primero — mismo criterio que el resto de los listados de detalle.
+  closed.sort((a, b) => b.fechafin.getTime() - a.fechafin.getTime());
+  return closed.map((row) => row.id);
+}
+
+export async function getClosedTasksForPeriod(start: Date, end: Date): Promise<number> {
+  return (await getClosedRequestIdsForPeriod(start, end)).length;
 }
 
 export interface ResponsibleAreaPeriodBreakdown {
@@ -278,4 +286,204 @@ export async function getPeriodSnapshot(period: Period): Promise<PeriodSnapshot>
 
 export function getPreviousPeriodOf(period: Period): Period {
   return getPreviousPeriod(period);
+}
+
+// ---------------------------------------------------------------------------
+// Detalle interactivo de indicadores (/indicadores): dado un indicador y un
+// período, devuelve exactamente las Solicitudes que lo componen, reutilizando
+// las MISMAS condiciones WHERE que ya calculan el número mostrado en cada
+// KPI/tarjeta (getEstadoWhereForBucket, getNonAtendidaEstadoWhere,
+// getClosedRequestIdsForPeriod, el mismo filtro de Responsable que
+// /solicitudes) — así el conteo del KPI y el total del modal nunca pueden
+// divergir. Es la única función que el modal de detalle usa para pedir datos.
+// ---------------------------------------------------------------------------
+
+export type IndicatorKind =
+  | "solicitudes"
+  | "estado"
+  | "pctAtendidas"
+  | "cerradas"
+  | "backlog"
+  | "backlogOver7"
+  | "backlogOver15"
+  | "backlogOver30"
+  | "maquina"
+  | "responsable";
+
+export interface GetIndicatorRequestsParams {
+  indicator: IndicatorKind;
+  year: number;
+  month: number;
+  /** Requerido cuando indicator === "estado" (pendiente/espera/programada/atendida/otro). */
+  bucket?: EstadoBucket;
+  /** Requerido cuando indicator === "maquina": valor exacto de MAQUINA. */
+  maquina?: string;
+  /** Requerido cuando indicator === "responsable": "MANTENIMIENTO" | "PRODUCCION" | RESPONSIBLE_AREA_UNDEFINED_VALUE. */
+  responsable?: string;
+  take?: number;
+  skip?: number;
+}
+
+export interface IndicatorRequestRow {
+  id: string;
+  parte: string;
+  maquina: string | null;
+  estado: string | null;
+  problema: string | null;
+  tarea: string | null;
+  fecha: Date | null;
+  responsibleArea: MaintenanceRequestResponsibleArea | null;
+  /** Nombres de técnicos con asignación activa (removedAt = null), si los hay. */
+  technicianNames: string[];
+}
+
+export interface IndicatorRequestsPage {
+  items: IndicatorRequestRow[];
+  total: number;
+  /** Solo presente para indicator === "pctAtendidas": total de solicitudes del período (todas, no solo atendidas). */
+  periodTotal?: number;
+  /** Solo presente para indicator === "pctAtendidas": mismo cálculo que el KPI (atendidas/periodTotal). */
+  percentage?: number;
+}
+
+const INDICATOR_REQUEST_SELECT = {
+  id: true,
+  parte: true,
+  maquina: true,
+  estado: true,
+  problema: true,
+  tarea: true,
+  fecha: true,
+  responsibleArea: true,
+  assignedTechnicians: {
+    where: { removedAt: null },
+    select: { technician: { select: { fullName: true } } },
+  },
+} satisfies Prisma.MaintenanceRequestSelect;
+
+type RawIndicatorRequestRow = Prisma.MaintenanceRequestGetPayload<{
+  select: typeof INDICATOR_REQUEST_SELECT;
+}>;
+
+function toIndicatorRequestRow(row: RawIndicatorRequestRow): IndicatorRequestRow {
+  return {
+    id: row.id,
+    parte: row.parte,
+    maquina: row.maquina,
+    estado: row.estado,
+    problema: row.problema,
+    tarea: row.tarea,
+    fecha: row.fecha,
+    responsibleArea: row.responsibleArea,
+    technicianNames: row.assignedTechnicians.map((assignment) => assignment.technician.fullName),
+  };
+}
+
+async function findIndicatorPage(
+  where: Prisma.MaintenanceRequestWhereInput,
+  take: number,
+  skip: number,
+  order: "asc" | "desc" = "desc",
+): Promise<{ items: IndicatorRequestRow[]; total: number }> {
+  const [rows, total] = await Promise.all([
+    db.maintenanceRequest.findMany({
+      where,
+      select: INDICATOR_REQUEST_SELECT,
+      orderBy: { fecha: order },
+      take,
+      skip,
+    }),
+    db.maintenanceRequest.count({ where }),
+  ]);
+  return { items: rows.map(toIndicatorRequestRow), total };
+}
+
+/**
+ * Detalle de un indicador de /indicadores: la fuente única para el modal
+ * interactivo. No cambia ninguna regla de cálculo — cada rama arma
+ * exactamente el mismo WHERE que ya usa el indicador equivalente en esta
+ * misma página (getPeriodStats, getEstadoWhereForBucket,
+ * getNonAtendidaEstadoWhere, getClosedRequestIdsForPeriod, el filtro de
+ * Responsable de listMaintenanceRequests).
+ */
+export async function getIndicatorRequests(
+  params: GetIndicatorRequestsParams,
+): Promise<IndicatorRequestsPage> {
+  const { indicator, year, month, bucket, maquina, responsable, take = 20, skip = 0 } = params;
+  const { start, end } = getPeriodRange(year, month);
+  const periodWhere: Prisma.MaintenanceRequestWhereInput = { fecha: { gte: start, lt: end } };
+
+  switch (indicator) {
+    case "solicitudes":
+      return findIndicatorPage(periodWhere, take, skip);
+
+    case "estado": {
+      if (!bucket) throw new Error("getIndicatorRequests: falta 'bucket' para indicator 'estado'.");
+      const estadoWhere = await getEstadoWhereForBucket(bucket);
+      return findIndicatorPage({ ...periodWhere, ...estadoWhere }, take, skip);
+    }
+
+    case "pctAtendidas": {
+      const estadoWhere = await getEstadoWhereForBucket("atendida");
+      const [page, periodTotal] = await Promise.all([
+        findIndicatorPage({ ...periodWhere, ...estadoWhere }, take, skip),
+        db.maintenanceRequest.count({ where: periodWhere }),
+      ]);
+      const percentage = periodTotal > 0 ? Math.round((page.total / periodTotal) * 100) : 0;
+      return { ...page, periodTotal, percentage };
+    }
+
+    case "cerradas": {
+      const ids = await getClosedRequestIdsForPeriod(start, end);
+      const total = ids.length;
+      const pageIds = ids.slice(skip, skip + take);
+      if (pageIds.length === 0) return { items: [], total };
+      const rows = await db.maintenanceRequest.findMany({
+        where: { id: { in: pageIds } },
+        select: INDICATOR_REQUEST_SELECT,
+      });
+      const rowById = new Map(rows.map((row) => [row.id, row]));
+      // Se preserva el orden de `pageIds` (cierre más reciente primero), no el orden de la consulta.
+      const items = pageIds
+        .map((id) => rowById.get(id))
+        .filter((row): row is RawIndicatorRequestRow => Boolean(row))
+        .map(toIndicatorRequestRow);
+      return { items, total };
+    }
+
+    case "backlog": {
+      const estadoWhere = await getNonAtendidaEstadoWhere();
+      // Más antiguas primero — mismo criterio que listBacklogMaintenanceRequests (Dashboard).
+      return findIndicatorPage({ fecha: { lt: start }, ...estadoWhere }, take, skip, "asc");
+    }
+
+    case "backlogOver7":
+    case "backlogOver15":
+    case "backlogOver30": {
+      const days = indicator === "backlogOver7" ? 7 : indicator === "backlogOver15" ? 15 : 30;
+      const estadoWhere = await getNonAtendidaEstadoWhere();
+      const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      return findIndicatorPage({ fecha: { lt: cutoff }, ...estadoWhere }, take, skip, "asc");
+    }
+
+    case "maquina": {
+      if (!maquina) throw new Error("getIndicatorRequests: falta 'maquina' para indicator 'maquina'.");
+      return findIndicatorPage({ ...periodWhere, maquina }, take, skip);
+    }
+
+    case "responsable": {
+      const responsableWhere: Prisma.MaintenanceRequestWhereInput =
+        responsable === RESPONSIBLE_AREA_UNDEFINED_VALUE
+          ? { responsibleArea: null }
+          : responsable === "MANTENIMIENTO" || responsable === "PRODUCCION"
+            ? { responsibleArea: responsable }
+            : {};
+      return findIndicatorPage({ ...periodWhere, ...responsableWhere }, take, skip);
+    }
+
+    default: {
+      const exhaustiveCheck: never = indicator;
+      throw new Error(`getIndicatorRequests: indicador no soportado: ${exhaustiveCheck}`);
+    }
+  }
 }

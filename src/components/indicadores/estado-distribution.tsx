@@ -1,5 +1,7 @@
-import { ESTADO_BUCKET_LABELS, type EstadoBucket } from "@/lib/estado";
-import { getBucketStatValue, type DashboardStats } from "@/server/services/maintenance-requests.service";
+"use client";
+
+import { ESTADO_BUCKET_LABELS, getBucketStatValue, type DashboardStats, type EstadoBucket } from "@/lib/estado";
+import { useIndicatorModal } from "./indicator-modal-context";
 
 const ORDER: EstadoBucket[] = ["pendiente", "espera", "programada", "atendida", "otro"];
 
@@ -11,8 +13,10 @@ const COLOR_CLASS: Record<EstadoBucket, string> = {
   otro: "bg-muted-foreground",
 };
 
-/** Barras horizontales compactas por categoría (una por bucket), con cantidad y %. */
+/** Barras horizontales compactas por categoría (una por bucket), con cantidad y %. Cada barra abre el detalle de esa categoría. */
 export function EstadoDistribution({ stats }: { stats: DashboardStats }) {
+  const { openIndicator } = useIndicatorModal();
+
   if (stats.total === 0) {
     return <p className="text-sm text-muted-foreground">Sin solicitudes en este período.</p>;
   }
@@ -24,7 +28,17 @@ export function EstadoDistribution({ stats }: { stats: DashboardStats }) {
         if (value === 0) return null;
         const percentage = Math.round((value / stats.total) * 100);
         return (
-          <div key={bucket} className="flex items-center gap-3">
+          <button
+            key={bucket}
+            type="button"
+            onClick={() =>
+              openIndicator({
+                title: ESTADO_BUCKET_LABELS[bucket],
+                query: { indicator: "estado", bucket },
+              })
+            }
+            className="flex w-full items-center gap-3 rounded-md py-0.5 text-left transition-colors hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
             <span className="w-28 shrink-0 truncate text-xs text-muted-foreground sm:w-36">
               {ESTADO_BUCKET_LABELS[bucket]}
             </span>
@@ -37,7 +51,7 @@ export function EstadoDistribution({ stats }: { stats: DashboardStats }) {
             <span className="w-16 shrink-0 text-right text-xs font-medium text-foreground">
               {value} · {percentage}%
             </span>
-          </div>
+          </button>
         );
       })}
     </div>

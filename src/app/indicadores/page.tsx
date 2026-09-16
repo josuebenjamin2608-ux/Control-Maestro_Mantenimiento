@@ -1,9 +1,10 @@
 import Link from "next/link";
 
 import { AppShell } from "@/components/layout/app-shell";
-import { BacklogCard } from "@/components/indicadores/backlog-card";
+import { InteractiveBacklogCard } from "@/components/indicadores/backlog-card-interactive";
 import { ComparisonCard } from "@/components/indicadores/comparison-card";
 import { EstadoDistribution } from "@/components/indicadores/estado-distribution";
+import { IndicatorModalProvider } from "@/components/indicadores/indicator-modal-context";
 import { KpiRow } from "@/components/indicadores/kpi-row";
 import { MachineHighlights } from "@/components/indicadores/machine-highlights";
 import { PeriodFilterBar } from "@/components/indicadores/period-filter-bar";
@@ -82,112 +83,120 @@ export default async function IndicadoresPage({
   };
 
   const isEmpty = stats.total === 0;
+  const currentIndicadoresHref = buildIndicadoresHref(selectedYear, selectedMonth);
 
   return (
     <AppShell title="Indicadores">
-      <div className="mx-auto flex max-w-7xl flex-col gap-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex flex-col gap-1">
-            <h2 className="text-xl font-semibold text-foreground">Indicadores de Mantenimiento</h2>
-            <p className="text-sm text-muted-foreground">{currentSnapshot.label}</p>
+      <IndicatorModalProvider
+        year={selectedYear}
+        month={selectedMonth}
+        periodLabel={currentSnapshot.label}
+        backHref={currentIndicadoresHref}
+      >
+        <div className="mx-auto flex max-w-7xl flex-col gap-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex flex-col gap-1">
+              <h2 className="text-xl font-semibold text-foreground">Indicadores de Mantenimiento</h2>
+              <p className="text-sm text-muted-foreground">{currentSnapshot.label}</p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <PeriodFilterBar years={years} selectedYear={selectedYear} selectedMonth={selectedMonth} />
+              <Link
+                href={buildIndicadoresHref(currentYear, currentMonth)}
+                className="flex h-9 items-center rounded-md border border-input bg-background px-3 text-sm text-foreground hover:bg-secondary"
+              >
+                Mes actual
+              </Link>
+              <Link
+                href={buildIndicadoresHref(currentYear, selectedMonth)}
+                className="flex h-9 items-center rounded-md border border-input bg-background px-3 text-sm text-foreground hover:bg-secondary"
+              >
+                Año actual
+              </Link>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <PeriodFilterBar years={years} selectedYear={selectedYear} selectedMonth={selectedMonth} />
-            <Link
-              href={buildIndicadoresHref(currentYear, currentMonth)}
-              className="flex h-9 items-center rounded-md border border-input bg-background px-3 text-sm text-foreground hover:bg-secondary"
-            >
-              Mes actual
-            </Link>
-            <Link
-              href={buildIndicadoresHref(currentYear, selectedMonth)}
-              className="flex h-9 items-center rounded-md border border-input bg-background px-3 text-sm text-foreground hover:bg-secondary"
-            >
-              Año actual
-            </Link>
+          {isEmpty ? (
+            <Card>
+              <CardContent className="py-6 text-center text-sm text-muted-foreground">
+                No hay solicitudes registradas para este periodo.
+              </CardContent>
+            </Card>
+          ) : null}
+
+          <div className="flex flex-col gap-1.5">
+            <KpiRow stats={stats} closedTasks={closedTasks} />
+            <p className="text-xs text-muted-foreground">
+              Cerradas: solicitudes cuyas Minutas relacionadas registran FECHAFIN dentro del período
+              (última finalización cuando hay varias). Según cierres registrados en Minutas.
+            </p>
           </div>
-        </div>
 
-        {isEmpty ? (
-          <Card>
-            <CardContent className="py-6 text-center text-sm text-muted-foreground">
-              No hay solicitudes registradas para este periodo.
-            </CardContent>
-          </Card>
-        ) : null}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base text-foreground">Solicitudes por mes — {selectedYear}</CardTitle>
+                <CardDescription>El mes seleccionado se resalta.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <YearMonthlyChart data={monthlyData} highlightMonth={selectedMonth} />
+              </CardContent>
+            </Card>
 
-        <div className="flex flex-col gap-1.5">
-          <KpiRow stats={stats} closedTasks={closedTasks} />
-          <p className="text-xs text-muted-foreground">
-            Cerradas: solicitudes cuyas Minutas relacionadas registran FECHAFIN dentro del período
-            (última finalización cuando hay varias). Según cierres registrados en Minutas.
-          </p>
-        </div>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base text-foreground">Distribución por estado</CardTitle>
+                <CardDescription>Proporción real sobre las solicitudes del período.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <EstadoDistribution stats={stats} />
+              </CardContent>
+            </Card>
+          </div>
 
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base text-foreground">Solicitudes por mes — {selectedYear}</CardTitle>
-              <CardDescription>El mes seleccionado se resalta.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <YearMonthlyChart data={monthlyData} highlightMonth={selectedMonth} />
-            </CardContent>
-          </Card>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base text-foreground">Máquinas con más solicitudes</CardTitle>
+                <CardDescription>Top 10 del período seleccionado.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <MachineHighlights items={machineData.items} />
+              </CardContent>
+            </Card>
 
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base text-foreground">Distribución por estado</CardTitle>
-              <CardDescription>Proporción real sobre las solicitudes del período.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <EstadoDistribution stats={stats} />
-            </CardContent>
-          </Card>
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base text-foreground">Máquinas con más solicitudes</CardTitle>
-              <CardDescription>Top 10 del período seleccionado.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <MachineHighlights items={machineData.items} />
-            </CardContent>
-          </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base text-foreground">Backlog de mantenimiento</CardTitle>
+                <CardDescription>Solicitudes abiertas que arrastra el sistema.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <InteractiveBacklogCard backlog={backlog} />
+              </CardContent>
+            </Card>
+          </div>
 
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base text-foreground">Backlog de mantenimiento</CardTitle>
-              <CardDescription>Solicitudes abiertas que arrastra el sistema.</CardDescription>
+              <CardTitle className="text-base text-foreground">Distribución por responsable</CardTitle>
+              <CardDescription>Solicitudes del período por área responsable.</CardDescription>
             </CardHeader>
             <CardContent>
-              <BacklogCard backlog={backlog} />
+              <ResponsibleAreaDistribution breakdown={responsibleAreaData} />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base text-foreground">Comparación con el mes anterior</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ComparisonCard current={currentSnapshot} previous={previousSnapshot} />
             </CardContent>
           </Card>
         </div>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base text-foreground">Distribución por responsable</CardTitle>
-            <CardDescription>Solicitudes del período por área responsable.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ResponsibleAreaDistribution breakdown={responsibleAreaData} />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base text-foreground">Comparación con el mes anterior</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ComparisonCard current={currentSnapshot} previous={previousSnapshot} />
-          </CardContent>
-        </Card>
-      </div>
+      </IndicatorModalProvider>
     </AppShell>
   );
 }

@@ -161,15 +161,14 @@ export async function getDistinctEstados(): Promise<string[]> {
   return rows.map((row) => row.estado).filter((value): value is string => Boolean(value));
 }
 
-export interface DashboardStats {
-  total: number;
-  pendientes: number;
-  espera: number;
-  programadas: number;
-  atendidas: number;
-  /** ESTADOs que no calzaron con ninguna palabra clave conocida (ver classifyEstado). */
-  otros: number;
-}
+// DashboardStats y getBucketStatValue viven en lib/estado.ts (no acá): son
+// puros/sin dependencia de Prisma, y componentes CLIENTE (p. ej. las
+// tarjetas interactivas de /indicadores) necesitan importarlos sin arrastrar
+// el cliente de base de datos (pg) al bundle del navegador. Se re-exportan
+// acá para no romper el resto del código de servidor que ya los importa
+// desde este archivo.
+export type { DashboardStats } from "@/lib/estado";
+export { getBucketStatValue } from "@/lib/estado";
 
 /**
  * Where-clause real para "ESTADO != Realizado": construida a partir de los
@@ -187,6 +186,28 @@ export async function getNonAtendidaEstadoWhere(): Promise<Prisma.MaintenanceReq
   return nonAtendida.length > 0
     ? { OR: [{ estado: { in: nonAtendida } }, { estado: null }] }
     : { estado: null };
+}
+
+/**
+ * Where-clause real para UN bucket específico de classifyEstado (pendiente,
+ * espera, programada, atendida u otro), construida igual que
+ * getNonAtendidaEstadoWhere: a partir de los valores DISTINCT de ESTADO
+ * realmente presentes, nunca de una lista inventada. Si ningún ESTADO real
+ * cae en ese bucket, `estado: { in: [] }` no matchea ninguna fila — mismo
+ * resultado (0) que mostraría el KPI. Fuente única reutilizada por
+ * `getIndicatorRequests` (indicators.service.ts) para que el detalle del
+ * modal de cada KPI por estado coincida exactamente con su conteo.
+ */
+export async function getEstadoWhereForBucket(
+  bucket: EstadoBucket,
+): Promise<Prisma.MaintenanceRequestWhereInput> {
+  const distinctEstados = await getDistinctEstados();
+  const matching = distinctEstados.filter((estado) => classifyEstado(estado).bucket === bucket);
+  if (bucket === "otro") {
+    // "otro" también incluye solicitudes con ESTADO vacío (ver classifyEstado).
+    return matching.length > 0 ? { OR: [{ estado: { in: matching } }, { estado: null }] } : { estado: null };
+  }
+  return { estado: { in: matching } };
 }
 
 export interface OperationalRequestsParams {
@@ -306,19 +327,6 @@ export async function listBacklogMaintenanceRequests(params: ListBacklogParams) 
     ...(take !== undefined ? { take } : {}),
     include: { _count: { select: { logs: true } } },
   });
-}
-
-const BUCKET_STATS_KEY: Record<EstadoBucket, keyof Omit<DashboardStats, "total">> = {
-  pendiente: "pendientes",
-  espera: "espera",
-  programada: "programadas",
-  atendida: "atendidas",
-  otro: "otros",
-};
-
-/** Único punto de acceso bucket -> valor de DashboardStats (dashboard e Indicadores comparten esto). */
-export function getBucketStatValue(stats: DashboardStats, bucket: EstadoBucket): number {
-  return stats[BUCKET_STATS_KEY[bucket]];
 }
 
 export interface ResponsibleAreaSummary {

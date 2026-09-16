@@ -82,6 +82,35 @@ export function classifyEstado(estado: string | null | undefined): EstadoClassif
   return { bucket, label: raw, variant: ESTADO_BUCKET_VARIANTS[bucket] };
 }
 
+export interface DashboardStats {
+  total: number;
+  pendientes: number;
+  espera: number;
+  programadas: number;
+  atendidas: number;
+  /** ESTADOs que no calzaron con ninguna palabra clave conocida (ver classifyEstado). */
+  otros: number;
+}
+
+const BUCKET_STATS_KEY: Record<EstadoBucket, keyof Omit<DashboardStats, "total">> = {
+  pendiente: "pendientes",
+  espera: "espera",
+  programada: "programadas",
+  atendida: "atendidas",
+  otro: "otros",
+};
+
+/**
+ * Único punto de acceso bucket -> valor de DashboardStats (Dashboard e
+ * Indicadores comparten esto). Vive acá (no en maintenance-requests.service.ts,
+ * que sí importa Prisma/pg) para que los componentes cliente que solo
+ * necesitan esta función pura puedan importarla sin arrastrar el cliente de
+ * base de datos al bundle del navegador.
+ */
+export function getBucketStatValue(stats: DashboardStats, bucket: EstadoBucket): number {
+  return stats[BUCKET_STATS_KEY[bucket]];
+}
+
 /** Días transcurridos desde `date` hasta ahora (0 si es hoy). */
 export function daysSince(date: Date | null | undefined): number | null {
   if (!date) return null;

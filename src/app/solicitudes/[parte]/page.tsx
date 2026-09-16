@@ -30,6 +30,7 @@ export const dynamic = "force-dynamic";
 function backLinkLabel(back: string | null): string {
   if (!back || back.startsWith("/solicitudes")) return "Volver a Solicitudes";
   if (back === "/" || back.startsWith("/?")) return "Volver al Panel de control";
+  if (back.startsWith("/indicadores")) return "Volver a Indicadores";
   return "Volver";
 }
 
