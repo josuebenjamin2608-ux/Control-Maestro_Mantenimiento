@@ -68,8 +68,11 @@ export default async function IndicadoresPage({
 
   // "Año actual" navega a `?year=X` SIN `month` — esa ausencia (no un mes
   // inválido, que cae de vuelta al mes actual) es la que activa el modo año
-  // completo. Ver buildIndicadoresYearHref.
-  const isYearMode = monthParam === undefined;
+  // completo. Ver buildIndicadoresYearHref. Requiere ADEMÁS que `year` esté
+  // presente: una visita "en blanco" a /indicadores (sin ningún parámetro)
+  // no debe entrar en modo año — el comportamiento predeterminado sigue
+  // siendo "Mes actual" (año/mes actuales).
+  const isYearMode = yearParam !== undefined && monthParam === undefined;
 
   const parsedMonth = monthParam ? Number(monthParam) : currentMonth;
   const selectedMonth =
