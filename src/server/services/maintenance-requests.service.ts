@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { classifyEstado, ESTADO_BUCKET_PRIORITY, type EstadoBucket } from "@/lib/estado";
+import { formatParteDisplay } from "@/lib/parte";
 import { RESPONSIBLE_AREA_UNDEFINED_VALUE } from "@/lib/responsible-area";
 import type { ImportFileType, Prisma } from "@/generated/prisma/client";
 
@@ -469,7 +470,7 @@ export async function getNotifications(limit = 20): Promise<NotificationItem[]> 
     items.push({
       id: `assignment-${assignment.id}`,
       type: "technician_assigned",
-      message: `Se asignó a ${assignment.technician.fullName} en la solicitud ${assignment.maintenanceRequest.parte}`,
+      message: `Se asignó a ${assignment.technician.fullName} en la solicitud ${formatParteDisplay(assignment.maintenanceRequest.parte)}`,
       createdAt: assignment.assignedAt,
       href: `/solicitudes/${encodeURIComponent(assignment.maintenanceRequest.parte)}`,
     });

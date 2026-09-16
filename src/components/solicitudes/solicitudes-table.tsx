@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/table";
 import { formatCalendarDate } from "@/lib/dates";
 import { daysSince } from "@/lib/estado";
+import { formatParteDisplay } from "@/lib/parte";
 import { formatResponsibleArea } from "@/lib/responsible-area";
 import type { listMaintenanceRequests } from "@/server/services/maintenance-requests.service";
 
@@ -74,7 +75,9 @@ export function SolicitudesTable({
           >
             <div className="flex items-center justify-between gap-2">
               <div className="flex min-w-0 items-center gap-1.5">
-                <span className="truncate font-medium text-foreground">{request.parte}</span>
+                <span className="truncate font-medium text-foreground">
+                  {formatParteDisplay(request.parte)}
+                </span>
                 <HistoricalBadge isHistorical={request.isHistorical} />
               </div>
               <EstadoBadge estado={request.estado} />
@@ -129,7 +132,9 @@ export function SolicitudesTable({
                 >
                   <TableCell>
                     <div className="flex items-center gap-2">
-                      <span className="font-medium text-foreground">{request.parte}</span>
+                      <span className="font-medium text-foreground">
+                        {formatParteDisplay(request.parte)}
+                      </span>
                       <HistoricalBadge isHistorical={request.isHistorical} />
                     </div>
                   </TableCell>

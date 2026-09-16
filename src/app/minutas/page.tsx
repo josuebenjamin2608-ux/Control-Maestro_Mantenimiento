@@ -13,6 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatParteDisplay } from "@/lib/parte";
 import { listMaintenanceLogs } from "@/server/services/maintenance-requests.service";
 
 // Consulta la base de datos: debe resolverse en cada request, no se puede
@@ -106,7 +107,7 @@ export default async function MinutasPage({
                               href={`/solicitudes/${encodeURIComponent(log.maintenanceRequest.parte)}`}
                               className="text-primary hover:underline"
                             >
-                              {log.maintenanceRequest.parte}
+                              {formatParteDisplay(log.maintenanceRequest.parte)}
                             </Link>
                           ) : (
                             "—"

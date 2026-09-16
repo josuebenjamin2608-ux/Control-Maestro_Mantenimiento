@@ -21,6 +21,7 @@ import {
   listTechnicians,
 } from "@/server/services/maintenance-requests.service";
 import { formatCalendarDate } from "@/lib/dates";
+import { formatParteDisplay } from "@/lib/parte";
 import { sanitizeInternalPath } from "@/lib/safe-url";
 
 // Consulta la base de datos: debe resolverse en cada request, no se puede
@@ -89,7 +90,7 @@ export default async function SolicitudDetailPage({
   const backHref = sanitizeInternalPath(back) ?? "/solicitudes";
 
   return (
-    <AppShell title={`Solicitud ${request.parte}`}>
+    <AppShell title={`Solicitud ${formatParteDisplay(request.parte)}`}>
       <div className="mx-auto flex max-w-4xl flex-col gap-6">
         <Link
           href={backHref}
@@ -102,7 +103,9 @@ export default async function SolicitudDetailPage({
         <Card>
           <CardHeader>
             <div className="flex flex-wrap items-center gap-2">
-              <CardTitle className="text-lg text-foreground">PARTE {request.parte}</CardTitle>
+              <CardTitle className="text-lg text-foreground">
+                PARTE {formatParteDisplay(request.parte)}
+              </CardTitle>
               <HistoricalBadge isHistorical={request.isHistorical} />
               <EstadoBadge estado={request.estado} />
             </div>
@@ -113,7 +116,7 @@ export default async function SolicitudDetailPage({
               <div>
                 <SectionLabel>Identificación</SectionLabel>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                  <Field label="PARTE" value={request.parte} />
+                  <Field label="PARTE" value={formatParteDisplay(request.parte)} />
                   <Field label="Máquina" value={request.maquina} />
                   <Field label="Código de máquina" value={request.codigo} />
                 </div>

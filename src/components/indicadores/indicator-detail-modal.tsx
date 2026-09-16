@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCalendarDate } from "@/lib/dates";
+import { formatParteDisplay } from "@/lib/parte";
 import { formatPeriodLabel } from "@/lib/period";
 import { formatResponsibleArea } from "@/lib/responsible-area";
 import { fetchIndicatorRequests } from "@/server/actions/indicators";
@@ -54,7 +55,7 @@ function detailHref(parte: string, backHref: string) {
 function ParteLink({ row, backHref }: { row: IndicatorRequestRow; backHref: string }) {
   return (
     <Link href={detailHref(row.parte, backHref)} className="font-medium text-primary hover:underline">
-      {row.parte}
+      {formatParteDisplay(row.parte)}
     </Link>
   );
 }

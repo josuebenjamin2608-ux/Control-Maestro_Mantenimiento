@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ESTADO_BUCKET_LABELS } from "@/lib/estado";
 import { formatCalendarDate } from "@/lib/dates";
+import { formatParteDisplay } from "@/lib/parte";
 import { formatResponsibleArea, RESPONSIBLE_AREA_LABELS } from "@/lib/responsible-area";
 import { fetchIndicatorRequests } from "@/server/actions/indicators";
 import type { IndicatorRequestRow, IndicatorRequestsPage } from "@/server/services/indicators.service";
@@ -211,7 +212,7 @@ function OpenTasksDialogBody({
                         href={detailHref(row.parte, backHref)}
                         className="font-medium text-primary hover:underline"
                       >
-                        {row.parte}
+                        {formatParteDisplay(row.parte)}
                       </Link>
                       <EstadoBadge estado={row.estado} />
                     </div>
@@ -256,7 +257,7 @@ function OpenTasksDialogBody({
                             href={detailHref(row.parte, backHref)}
                             className="font-medium text-primary hover:underline"
                           >
-                            {row.parte}
+                            {formatParteDisplay(row.parte)}
                           </Link>
                         </TableCell>
                         <TableCell className={`${COLUMN_WIDTHS.maquina} truncate`} title={row.maquina ?? undefined}>

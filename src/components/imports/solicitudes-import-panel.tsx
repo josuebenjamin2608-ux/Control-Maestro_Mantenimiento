@@ -7,6 +7,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { formatParteDisplay } from "@/lib/parte";
 import {
   confirmMaintenanceRequestFile,
   previewMaintenanceRequestFile,
@@ -157,7 +158,7 @@ export function SolicitudesImportPanel() {
                   {preview.summary.rows.map((row) => (
                     <TableRow key={row.rowNumber}>
                       <TableCell>{row.rowNumber}</TableCell>
-                      <TableCell>{row.parte ?? "—"}</TableCell>
+                      <TableCell>{formatParteDisplay(row.parte) ?? "—"}</TableCell>
                       <TableCell>{row.data?.maquina ?? "—"}</TableCell>
                       <TableCell className="max-w-64 truncate" title={row.data?.problema ?? row.errorMessage ?? undefined}>
                         {row.data?.problema ?? row.errorMessage ?? "—"}
