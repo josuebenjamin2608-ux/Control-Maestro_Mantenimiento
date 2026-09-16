@@ -10,13 +10,20 @@ export type BacklogStatKind = "total" | "over7" | "over15" | "over30";
  * renderiza como el mismo `<div>` estático de siempre — cero cambios de
  * markup/estilo en el Dashboard. Solo /indicadores lo pasa (vía
  * InteractiveBacklogCard), y ahí cada bloque se vuelve un `<button>`.
+ *
+ * `totalCaption` es opcional por la misma razón: /indicadores no lo pasa
+ * (conserva el texto de siempre, "... anterior al período seleccionado"),
+ * mientras que el Dashboard sí lo pasa porque ahí `backlog.total` ya no es
+ * relativo a un período sino el total real de solicitudes abiertas.
  */
 export function BacklogCard({
   backlog,
   onSelect,
+  totalCaption = "Solicitudes sin Realizado, con fecha anterior al período seleccionado",
 }: {
   backlog: BacklogBreakdown;
   onSelect?: (kind: BacklogStatKind) => void;
+  totalCaption?: string;
 }) {
   const totalClassName =
     "flex items-center gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3" +
@@ -29,9 +36,7 @@ export function BacklogCard({
       <AlertTriangle className="size-5 shrink-0 text-destructive" />
       <div className="flex flex-col">
         <span className="text-2xl font-semibold text-foreground">{backlog.total}</span>
-        <span className="text-xs text-muted-foreground">
-          Solicitudes sin Realizado, con fecha anterior al período seleccionado
-        </span>
+        <span className="text-xs text-muted-foreground">{totalCaption}</span>
       </div>
     </>
   );

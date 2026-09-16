@@ -174,10 +174,10 @@ export { getBucketStatValue } from "@/lib/estado";
  * Where-clause real para "ESTADO != Realizado": construida a partir de los
  * valores DISTINCT de ESTADO realmente presentes (vía classifyEstado), nunca
  * de una lista inventada. Única fuente de verdad de "abierta" compartida por
- * el Dashboard (listOperationalMaintenanceRequests/listBacklogMaintenanceRequests
- * más abajo) e Indicadores (getBacklogBeforePeriod/getBacklogBreakdown en
- * indicators.service.ts), para no mantener dos definiciones que puedan
- * divergir.
+ * el Dashboard (listOperationalMaintenanceRequests/getOpenBucketCounts/
+ * getOpenRequestsAging más abajo) e Indicadores (getBacklogBeforePeriod/
+ * getBacklogBreakdown en indicators.service.ts), para no mantener dos
+ * definiciones que puedan divergir.
  */
 export async function getNonAtendidaEstadoWhere(): Promise<Prisma.MaintenanceRequestWhereInput> {
   const distinctEstados = await getDistinctEstados();
@@ -304,29 +304,81 @@ export async function listOperationalMaintenanceRequests(params: OperationalRequ
   return results;
 }
 
-export interface ListBacklogParams {
-  /** Solicitudes con FECHA anterior a este instante (normalmente el inicio del período seleccionado). */
-  before: Date;
-  /** Sin definir = sin límite. */
-  take?: number;
+export interface OpenBucketCounts {
+  /** Suma de los 4 buckets de abajo — todas las solicitudes con ESTADO != Realizado. */
+  totalAbiertas: number;
+  pendientes: number;
+  espera: number;
+  programadas: number;
+  otros: number;
 }
 
 /**
- * Backlog histórico: solicitudes con FECHA anterior al período seleccionado
- * y ESTADO != Realizado (misma clasificación que listOperationalMaintenanceRequests,
- * vía getNonAtendidaEstadoWhere). Ordenadas por FECHA ascendente (las más
- * antiguas primero), para priorizar lo que lleva más tiempo abierto —
- * a diferencia del listado operativo del mes, que ordena por más recientes.
+ * Conteo de solicitudes ABIERTAS (ESTADO != Realizado) por bucket, SIN
+ * filtro de FECHA — el estado operativo real actual del Panel de control:
+ * una solicitud abierta de julio sigue contando en septiembre mientras no
+ * pase a Realizado. A diferencia de `getPeriodStats` (indicators.service.ts,
+ * usado por /indicadores), esto es intencionalmente independiente del
+ * período seleccionado. No incluye "atendidas": esa sigue siendo una
+ * métrica del período (cuántas se completaron ESE mes), no un conteo de
+ * "abiertas".
  */
-export async function listBacklogMaintenanceRequests(params: ListBacklogParams) {
-  const { before, take } = params;
-  const estadoWhere = await getNonAtendidaEstadoWhere();
-  return db.maintenanceRequest.findMany({
-    where: { fecha: { lt: before }, ...estadoWhere },
-    orderBy: { fecha: "asc" },
-    ...(take !== undefined ? { take } : {}),
-    include: { _count: { select: { logs: true } } },
+export async function getOpenBucketCounts(): Promise<OpenBucketCounts> {
+  const grouped = await db.maintenanceRequest.groupBy({
+    by: ["estado"],
+    _count: { _all: true },
   });
+
+  const counts: OpenBucketCounts = { totalAbiertas: 0, pendientes: 0, espera: 0, programadas: 0, otros: 0 };
+  for (const group of grouped) {
+    const { bucket } = classifyEstado(group.estado);
+    if (bucket === "atendida") continue;
+    const count = group._count._all;
+    counts.totalAbiertas += count;
+    if (bucket === "pendiente") counts.pendientes += count;
+    else if (bucket === "espera") counts.espera += count;
+    else if (bucket === "programada") counts.programadas += count;
+    else counts.otros += count;
+  }
+  return counts;
+}
+
+export interface OpenRequestsAging {
+  /** Todas las solicitudes abiertas (ESTADO != Realizado) — mismo universo que getOpenBucketCounts().totalAbiertas. */
+  total: number;
+  over7Days: number;
+  over15Days: number;
+  over30Days: number;
+}
+
+/**
+ * Antigüedad del total de solicitudes abiertas, SIN filtro de FECHA — a
+ * diferencia de `getBacklogBreakdown` (indicators.service.ts, usado por
+ * /indicadores), donde `total` se acota a "anterior al período
+ * seleccionado". Acá `total` es exactamente "Solicitudes abiertas" del
+ * Dashboard: los tres umbrales de antigüedad (+7/+15/+30 días, siempre
+ * relativos a hoy) son subconjuntos de ese mismo universo, no una lista
+ * aparte.
+ */
+export async function getOpenRequestsAging(): Promise<OpenRequestsAging> {
+  const estadoWhere = await getNonAtendidaEstadoWhere();
+  const now = new Date();
+  const day = 24 * 60 * 60 * 1000;
+
+  const [total, over7Days, over15Days, over30Days] = await Promise.all([
+    db.maintenanceRequest.count({ where: estadoWhere }),
+    db.maintenanceRequest.count({
+      where: { fecha: { lt: new Date(now.getTime() - 7 * day) }, ...estadoWhere },
+    }),
+    db.maintenanceRequest.count({
+      where: { fecha: { lt: new Date(now.getTime() - 15 * day) }, ...estadoWhere },
+    }),
+    db.maintenanceRequest.count({
+      where: { fecha: { lt: new Date(now.getTime() - 30 * day) }, ...estadoWhere },
+    }),
+  ]);
+
+  return { total, over7Days, over15Days, over30Days };
 }
 
 export interface ResponsibleAreaSummary {
