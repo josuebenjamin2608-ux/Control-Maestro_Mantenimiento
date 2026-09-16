@@ -140,7 +140,7 @@ export default async function IndicadoresPage({
                 <CardDescription>El mes seleccionado se resalta.</CardDescription>
               </CardHeader>
               <CardContent>
-                <YearMonthlyChart data={monthlyData} highlightMonth={selectedMonth} />
+                <YearMonthlyChart data={monthlyData} year={selectedYear} highlightMonth={selectedMonth} />
               </CardContent>
             </Card>
 
