@@ -8,6 +8,7 @@ import { EstadoDistribution } from "@/components/indicadores/estado-distribution
 import { IndicatorModalProvider } from "@/components/indicadores/indicator-modal-context";
 import { KpiRow } from "@/components/indicadores/kpi-row";
 import { MachineHighlights } from "@/components/indicadores/machine-highlights";
+import { OpenTasksButton } from "@/components/indicadores/open-tasks-button";
 import { OperatorHighlights } from "@/components/indicadores/operator-highlights";
 import { PeriodFilterBar } from "@/components/indicadores/period-filter-bar";
 import { ResponsibleAreaDistribution } from "@/components/indicadores/responsible-area-distribution";
@@ -34,7 +35,10 @@ import {
   getYearPeriodRange,
   type PeriodSnapshot,
 } from "@/server/services/indicators.service";
-import { getOpenBucketCounts } from "@/server/services/maintenance-requests.service";
+import {
+  getOpenBucketCounts,
+  getOpenRequestsByResponsibleArea,
+} from "@/server/services/maintenance-requests.service";
 
 // Consulta la base de datos: debe resolverse en cada request, no se puede
 // pre-renderizar en build.
@@ -95,6 +99,7 @@ export default async function IndicadoresPage({
     previousSnapshot,
     responsibleAreaData,
     openCounts,
+    openResponsibleAreaData,
   ] = await Promise.all([
     getPeriodStats(start, end),
     getClosedTasksForPeriod(start, end),
@@ -106,10 +111,14 @@ export default async function IndicadoresPage({
     // omite la consulta y la tarjeta de comparación no se muestra (ver más abajo).
     isYearMode ? Promise.resolve(null) : getPeriodSnapshot(previousPeriod),
     getResponsibleAreaDistributionForPeriod(start, end),
-    // "Estado actual de la operación": ESTADO != Realizado, SIN filtro de
-    // FECHA — independiente del período seleccionado (misma fuente que el
-    // Dashboard, ver maintenance-requests.service.ts).
+    // "Estado actual de la operación" y el botón "Tareas abiertas": ESTADO !=
+    // Realizado, SIN filtro de FECHA — independiente del período
+    // seleccionado (misma fuente que el Dashboard, ver
+    // maintenance-requests.service.ts). No se toca la definición existente
+    // de "Distribución por responsable" (period-scoped, arriba) — esta es
+    // la versión ABIERTA/histórica que ya usa el Dashboard.
     getOpenBucketCounts(),
+    getOpenRequestsByResponsibleArea(),
   ]);
 
   const periodLabel = isYearMode ? `Año ${selectedYear} completo` : formatPeriodLabel(period);
@@ -155,6 +164,11 @@ export default async function IndicadoresPage({
               >
                 Año actual
               </Link>
+              <OpenTasksButton
+                counts={openCounts}
+                responsibleArea={openResponsibleAreaData}
+                backHref={currentIndicadoresHref}
+              />
             </div>
           </div>
 
