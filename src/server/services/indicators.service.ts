@@ -160,6 +160,89 @@ export async function getMachineDistributionForPeriod(
   return { items, total };
 }
 
+export interface OperatorPeriodItem {
+  /** CODEMPLE si la fila lo trae; si no, null (se agrupó por EMPLEADO normalizado, o es "Sin definir"). */
+  codemple: string | null;
+  /** EMPLEADO tal cual apareció la primera vez para este grupo — nunca inventado. "Sin definir" si no hay CODEMPLE ni EMPLEADO. */
+  label: string;
+  /** EMPLEADO real cuando el agrupamiento fue por nombre (codemple null y label !== "Sin definir"); usado para reconstruir el filtro exacto en getIndicatorRequests. */
+  empleado: string | null;
+  count: number;
+  percentage: number;
+}
+
+/**
+ * Sin tildes + MAYÚSCULAS + espacios colapsados: agrupa "JUAN PEREZ"/"Juan
+ * Pérez"/"JUAN  PEREZ" como el mismo operario cuando no hay CODEMPLE — las
+ * tildes se ignoran porque son la inconsistencia más común entre grafías del
+ * mismo nombre en los datos de origen (p. ej. "María Gómez" vs "MARIA GOMEZ").
+ */
+function normalizeOperatorName(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * Operario = quién REGISTRA la Solicitud (CODEMPLE/EMPLEADO), NUNCA el
+ * técnico asignado (MaintenanceRequestTechnician es un concepto aparte, no
+ * tocado acá). Se agrupa por CODEMPLE cuando existe (identificador estable);
+ * sin CODEMPLE, se agrupa por EMPLEADO normalizado para no duplicar al mismo
+ * operario por diferencias de mayúsculas/espacios — nunca se inventa un
+ * nombre: `label` siempre es un EMPLEADO real tal cual vino del archivo, o
+ * "Sin definir" si la fila no trae ninguno de los dos campos.
+ */
+export async function getOperatorDistributionForPeriod(
+  start: Date,
+  end: Date,
+  limit = 10,
+): Promise<{ items: OperatorPeriodItem[]; total: number }> {
+  const rows = await db.maintenanceRequest.findMany({
+    where: { fecha: { gte: start, lt: end } },
+    select: { codemple: true, empleado: true },
+  });
+  const total = rows.length;
+
+  const groups = new Map<
+    string,
+    { codemple: string | null; empleado: string | null; label: string; count: number }
+  >();
+  for (const row of rows) {
+    const codemple = row.codemple?.trim() || null;
+    const empleado = row.empleado?.trim() || null;
+
+    let key: string;
+    if (codemple) key = `c:${codemple}`;
+    else if (empleado) key = `e:${normalizeOperatorName(empleado)}`;
+    else key = "sin_definir";
+
+    const existing = groups.get(key);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      groups.set(key, {
+        codemple,
+        empleado: codemple ? null : empleado,
+        label: codemple ? (empleado ?? codemple) : (empleado ?? "Sin definir"),
+        count: 1,
+      });
+    }
+  }
+
+  const items = Array.from(groups.values())
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit)
+    .map((group) => ({
+      ...group,
+      percentage: total > 0 ? (group.count / total) * 100 : 0,
+    }));
+
+  return { items, total };
+}
+
 export interface MonthPoint {
   month: number;
   label: string;
@@ -308,7 +391,8 @@ export type IndicatorKind =
   | "backlogOver15"
   | "backlogOver30"
   | "maquina"
-  | "responsable";
+  | "responsable"
+  | "operario";
 
 export interface GetIndicatorRequestsParams {
   indicator: IndicatorKind;
@@ -320,6 +404,12 @@ export interface GetIndicatorRequestsParams {
   maquina?: string;
   /** Requerido cuando indicator === "responsable": "MANTENIMIENTO" | "PRODUCCION" | RESPONSIBLE_AREA_UNDEFINED_VALUE. */
   responsable?: string;
+  /** indicator === "operario" con CODEMPLE disponible: valor exacto de CODEMPLE (identificador estable). */
+  codemple?: string;
+  /** indicator === "operario" SIN CODEMPLE: EMPLEADO real de ese grupo (se compara normalizado, igual que getOperatorDistributionForPeriod). */
+  empleado?: string;
+  /** indicator === "operario" para el grupo "Sin definir" (sin CODEMPLE ni EMPLEADO). */
+  operarioSinDefinir?: boolean;
   take?: number;
   skip?: number;
 }
@@ -333,6 +423,9 @@ export interface IndicatorRequestRow {
   tarea: string | null;
   fecha: Date | null;
   responsibleArea: MaintenanceRequestResponsibleArea | null;
+  /** CODEMPLE/EMPLEADO crudos — quién REGISTRÓ la solicitud (operario), no el técnico asignado. */
+  codemple: string | null;
+  empleado: string | null;
   /** Nombres de técnicos con asignación activa (removedAt = null), si los hay. */
   technicianNames: string[];
 }
@@ -355,6 +448,8 @@ const INDICATOR_REQUEST_SELECT = {
   tarea: true,
   fecha: true,
   responsibleArea: true,
+  codemple: true,
+  empleado: true,
   assignedTechnicians: {
     where: { removedAt: null },
     select: { technician: { select: { fullName: true } } },
@@ -375,6 +470,8 @@ function toIndicatorRequestRow(row: RawIndicatorRequestRow): IndicatorRequestRow
     tarea: row.tarea,
     fecha: row.fecha,
     responsibleArea: row.responsibleArea,
+    codemple: row.codemple,
+    empleado: row.empleado,
     technicianNames: row.assignedTechnicians.map((assignment) => assignment.technician.fullName),
   };
 }
@@ -399,17 +496,65 @@ async function findIndicatorPage(
 }
 
 /**
+ * ids de Solicitudes del período cuyo operario (CODEMPLE/EMPLEADO) coincide
+ * con el grupo pedido — MISMA normalización que getOperatorDistributionForPeriod,
+ * para que el ranking y el modal describan exactamente el mismo universo
+ * (una fila con CODEMPLE nunca se compara por nombre, y sin CODEMPLE se
+ * compara por EMPLEADO normalizado, no por igualdad exacta de texto).
+ */
+async function getOperatorRequestIds(
+  start: Date,
+  end: Date,
+  target: { codemple?: string; empleado?: string; operarioSinDefinir?: boolean },
+): Promise<string[]> {
+  const rows = await db.maintenanceRequest.findMany({
+    where: { fecha: { gte: start, lt: end } },
+    select: { id: true, codemple: true, empleado: true },
+  });
+
+  const ids: string[] = [];
+  for (const row of rows) {
+    const codemple = row.codemple?.trim() || null;
+    const empleado = row.empleado?.trim() || null;
+
+    if (target.codemple) {
+      if (codemple === target.codemple) ids.push(row.id);
+    } else if (target.empleado) {
+      if (!codemple && empleado && normalizeOperatorName(empleado) === normalizeOperatorName(target.empleado)) {
+        ids.push(row.id);
+      }
+    } else if (target.operarioSinDefinir) {
+      if (!codemple && !empleado) ids.push(row.id);
+    }
+  }
+  return ids;
+}
+
+/**
  * Detalle de un indicador de /indicadores: la fuente única para el modal
  * interactivo. No cambia ninguna regla de cálculo — cada rama arma
  * exactamente el mismo WHERE que ya usa el indicador equivalente en esta
  * misma página (getPeriodStats, getEstadoWhereForBucket,
  * getNonAtendidaEstadoWhere, getClosedRequestIdsForPeriod, el filtro de
- * Responsable de listMaintenanceRequests).
+ * Responsable de listMaintenanceRequests, la normalización de
+ * getOperatorDistributionForPeriod).
  */
 export async function getIndicatorRequests(
   params: GetIndicatorRequestsParams,
 ): Promise<IndicatorRequestsPage> {
-  const { indicator, year, month, bucket, maquina, responsable, take = 20, skip = 0 } = params;
+  const {
+    indicator,
+    year,
+    month,
+    bucket,
+    maquina,
+    responsable,
+    codemple,
+    empleado,
+    operarioSinDefinir,
+    take = 20,
+    skip = 0,
+  } = params;
   const { start, end } = getPeriodRange(year, month);
   const periodWhere: Prisma.MaintenanceRequestWhereInput = { fecha: { gte: start, lt: end } };
 
@@ -479,6 +624,11 @@ export async function getIndicatorRequests(
             ? { responsibleArea: responsable }
             : {};
       return findIndicatorPage({ ...periodWhere, ...responsableWhere }, take, skip);
+    }
+
+    case "operario": {
+      const ids = await getOperatorRequestIds(start, end, { codemple, empleado, operarioSinDefinir });
+      return findIndicatorPage({ id: { in: ids } }, take, skip);
     }
 
     default: {

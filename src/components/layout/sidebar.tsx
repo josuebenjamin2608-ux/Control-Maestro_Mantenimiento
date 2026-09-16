@@ -16,9 +16,9 @@ export function SidebarBrand() {
         <Factory className="size-4.5" />
       </span>
       <div className="flex flex-col leading-tight">
-        <span className="text-sm font-semibold">Control Maestro</span>
+        <span className="text-sm font-semibold">SIMI</span>
         <span className="text-xs text-sidebar-foreground/60">
-          Mantenimiento Industrial
+          Sistema Inteligente de Mantenimiento
         </span>
       </div>
     </div>

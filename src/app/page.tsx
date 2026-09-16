@@ -232,7 +232,7 @@ export default async function DashboardPage({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-col gap-1">
             <h2 className="text-xl font-semibold text-foreground">
-              Control Maestro Mantenimiento
+              SIMI · Sistema Inteligente de Mantenimiento de INDUCARTON
             </h2>
             <p className="text-sm text-muted-foreground">
               Solicitudes abiertas: estado operativo actual, sin importar la fecha. Solicitudes del

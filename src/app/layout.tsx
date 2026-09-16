@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Control Maestro Mantenimiento",
+  title: "SIMI · Sistema Inteligente de Mantenimiento de INDUCARTON",
   description:
     "Sistema de gestión de mantenimiento industrial (CMMS): activos, órdenes de trabajo, mantenimiento preventivo y correctivo, inventario e indicadores.",
 };

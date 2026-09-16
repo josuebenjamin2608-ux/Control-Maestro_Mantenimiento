@@ -7,6 +7,7 @@ import { EstadoDistribution } from "@/components/indicadores/estado-distribution
 import { IndicatorModalProvider } from "@/components/indicadores/indicator-modal-context";
 import { KpiRow } from "@/components/indicadores/kpi-row";
 import { MachineHighlights } from "@/components/indicadores/machine-highlights";
+import { OperatorHighlights } from "@/components/indicadores/operator-highlights";
 import { PeriodFilterBar } from "@/components/indicadores/period-filter-bar";
 import { ResponsibleAreaDistribution } from "@/components/indicadores/responsible-area-distribution";
 import { YearMonthlyChart } from "@/components/indicadores/year-monthly-chart";
@@ -24,6 +25,7 @@ import {
   getClosedTasksForPeriod,
   getMachineDistributionForPeriod,
   getMonthlyCountsForYear,
+  getOperatorDistributionForPeriod,
   getPeriodSnapshot,
   getPeriodStats,
   getPreviousPeriodOf,
@@ -64,16 +66,25 @@ export default async function IndicadoresPage({
   const previousPeriod = getPreviousPeriodOf(period);
   const { start, end } = getPeriodRange(selectedYear, selectedMonth);
 
-  const [stats, closedTasks, backlog, machineData, monthlyData, previousSnapshot, responsibleAreaData] =
-    await Promise.all([
-      getPeriodStats(start, end),
-      getClosedTasksForPeriod(start, end),
-      getBacklogBreakdown(start),
-      getMachineDistributionForPeriod(start, end, 10),
-      getMonthlyCountsForYear(selectedYear),
-      getPeriodSnapshot(previousPeriod),
-      getResponsibleAreaDistributionForPeriod(start, end),
-    ]);
+  const [
+    stats,
+    closedTasks,
+    backlog,
+    machineData,
+    operatorData,
+    monthlyData,
+    previousSnapshot,
+    responsibleAreaData,
+  ] = await Promise.all([
+    getPeriodStats(start, end),
+    getClosedTasksForPeriod(start, end),
+    getBacklogBreakdown(start),
+    getMachineDistributionForPeriod(start, end, 10),
+    getOperatorDistributionForPeriod(start, end, 10),
+    getMonthlyCountsForYear(selectedYear),
+    getPeriodSnapshot(previousPeriod),
+    getResponsibleAreaDistributionForPeriod(start, end),
+  ]);
 
   const currentSnapshot: PeriodSnapshot = {
     period,
@@ -168,6 +179,18 @@ export default async function IndicadoresPage({
 
             <Card>
               <CardHeader className="pb-2">
+                <CardTitle className="text-base text-foreground">Solicitudes por operario</CardTitle>
+                <CardDescription>Top 10 de quién registra más solicitudes en el período.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <OperatorHighlights items={operatorData.items} />
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <Card>
+              <CardHeader className="pb-2">
                 <CardTitle className="text-base text-foreground">Backlog de mantenimiento</CardTitle>
                 <CardDescription>Solicitudes abiertas que arrastra el sistema.</CardDescription>
               </CardHeader>
@@ -175,17 +198,17 @@ export default async function IndicadoresPage({
                 <InteractiveBacklogCard backlog={backlog} />
               </CardContent>
             </Card>
-          </div>
 
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base text-foreground">Distribución por responsable</CardTitle>
-              <CardDescription>Solicitudes del período por área responsable.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ResponsibleAreaDistribution breakdown={responsibleAreaData} />
-            </CardContent>
-          </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base text-foreground">Distribución por responsable</CardTitle>
+                <CardDescription>Solicitudes del período por área responsable.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ResponsibleAreaDistribution breakdown={responsibleAreaData} />
+              </CardContent>
+            </Card>
+          </div>
 
           <Card>
             <CardHeader className="pb-2">

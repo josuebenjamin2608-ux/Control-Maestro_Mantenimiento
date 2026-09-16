@@ -63,14 +63,20 @@ type FetchResult = { page: IndicatorRequestsPage } | { error: string };
 
 /** Ancho de columna (table-fixed) — suman 100% para que la tabla nunca necesite scroll horizontal. */
 const COLUMN_WIDTHS = {
-  parte: "w-[10%]",
-  maquina: "w-[13%]",
-  estado: "w-[9%]",
-  problema: "w-[24%]",
-  tarea: "w-[20%]",
-  fecha: "w-[10%]",
-  responsable: "w-[14%]",
+  parte: "w-[9%]",
+  maquina: "w-[12%]",
+  estado: "w-[8%]",
+  problema: "w-[20%]",
+  tarea: "w-[17%]",
+  fecha: "w-[9%]",
+  responsable: "w-[13%]",
+  operario: "w-[12%]",
 };
+
+/** OPERARIO = quién registró la Solicitud (CODEMPLE/EMPLEADO) — nunca el técnico asignado. */
+function operarioLabel(row: IndicatorRequestRow): string {
+  return row.empleado ?? row.codemple ?? "Sin definir";
+}
 
 /**
  * Cuerpo del modal para UN indicador ya abierto. Se remonta (vía `key` en el
@@ -187,6 +193,7 @@ function IndicatorModalBody({
                         ? ` · Técnico: ${row.technicianNames.join(", ")}`
                         : ""}
                     </span>
+                    <span className="text-xs text-muted-foreground">Operario: {operarioLabel(row)}</span>
                   </div>
                 ))}
               </div>
@@ -203,6 +210,7 @@ function IndicatorModalBody({
                       <TableHead className={COLUMN_WIDTHS.tarea}>Tarea</TableHead>
                       <TableHead className={COLUMN_WIDTHS.fecha}>Fecha</TableHead>
                       <TableHead className={COLUMN_WIDTHS.responsable}>Responsable</TableHead>
+                      <TableHead className={COLUMN_WIDTHS.operario}>Operario</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -239,6 +247,9 @@ function IndicatorModalBody({
                               {row.technicianNames.join(", ")}
                             </span>
                           ) : null}
+                        </TableCell>
+                        <TableCell className={`${COLUMN_WIDTHS.operario} truncate`} title={operarioLabel(row)}>
+                          {operarioLabel(row)}
                         </TableCell>
                       </TableRow>
                     ))}
