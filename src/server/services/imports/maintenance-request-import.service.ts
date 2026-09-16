@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import type { MaintenanceRequest, Prisma } from "@/generated/prisma/client";
 import type { MaintenanceRequestRow, ParsedMaintenanceRequestRowResult } from "@/lib/validations/imports";
+import { sendMaintenanceRequestCreatedEvent } from "@/server/services/vento.service";
 
 import {
   MAINTENANCE_REQUEST_HEADERS,
@@ -185,7 +186,13 @@ export interface ApplyMaintenanceRequestImportResult {
 export async function applyMaintenanceRequestImport(
   input: ApplyMaintenanceRequestImportInput,
 ): Promise<ApplyMaintenanceRequestImportResult> {
-  return db.$transaction(
+  // Filas realmente NEW y ya persistidas — se llena dentro de la transacción
+  // y se usa DESPUÉS de que confirme, para disparar maintenance_request.created
+  // (ver más abajo). Si la transacción entera falla y hace rollback, este
+  // array nunca llega a usarse (el `await` de $transaction lanza antes).
+  const newlyCreated: MaintenanceRequest[] = [];
+
+  const result = await db.$transaction(
     async (tx) => {
       const classified = await classifyRows(tx, input.rows);
       let retroactivelyRelatedCount = 0;
@@ -212,6 +219,7 @@ export async function applyMaintenanceRequestImport(
             },
           });
           requestId = created.id;
+          newlyCreated.push(created);
 
           // Sección 11: relacionar retroactivamente minutas que llegaron antes que esta solicitud.
           const pendingLogs = await tx.maintenanceLog.findMany({
@@ -289,4 +297,17 @@ export async function applyMaintenanceRequestImport(
     },
     { timeout: 30_000 },
   );
+
+  // Fuera de la transacción, y solo si llegamos acá (la importación ya está
+  // confirmada en PostgreSQL): dispara maintenance_request.created
+  // exclusivamente para filas NEW recién persistidas — nunca para
+  // MODIFIED/UNCHANGED/ERROR, y nunca de nuevo para un PARTE reimportado
+  // (que ya no clasifica como NEW). Promise.allSettled + que
+  // sendMaintenanceRequestCreatedEvent nunca lance: un fallo del webhook
+  // jamás debe afectar una importación que ya se guardó correctamente.
+  if (newlyCreated.length > 0) {
+    await Promise.allSettled(newlyCreated.map((request) => sendMaintenanceRequestCreatedEvent(request)));
+  }
+
+  return result;
 }
