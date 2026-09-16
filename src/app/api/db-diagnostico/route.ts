@@ -16,6 +16,14 @@ import { Prisma } from "@/generated/prisma/client";
  *   crudo del driver: se sanitiza cualquier cadena `postgres(ql)://...`
  *   antes de incluirlo en la respuesta, por si el motor la llegara a
  *   interpolar dentro del mensaje de error.
+ * - auditoría de schema (nombres de tabla/columna/migración — nunca datos
+ *   de negocio): migraciones registradas en `_prisma_migrations`, columnas
+ *   reales de `maintenance_requests` y `maintenance_request_technicians`,
+ *   y si existe el tipo enum `MaintenanceRequestResponsibleArea`. TODAS las
+ *   consultas de esta sección son SELECT puros contra el catálogo de
+ *   Postgres (information_schema/pg_type) o una lectura de
+ *   `_prisma_migrations` — ninguna DDL, ninguna escritura, ninguna lectura
+ *   de filas de negocio.
  */
 
 export const dynamic = "force-dynamic";
@@ -77,6 +85,178 @@ async function diagnosePrisma(): Promise<PrismaDiagnostic> {
   return { ok: true, databaseConnected: true, errorCode: null, errorMessageSafe: null };
 }
 
+/** Nombres de columna esperados por el schema.prisma ACTUAL del repo (fuente: prisma/schema.prisma, modelo MaintenanceRequest). */
+const EXPECTED_MAINTENANCE_REQUEST_COLUMNS = [
+  "id",
+  "parte",
+  "codigo",
+  "maquina",
+  "pieza",
+  "problema",
+  "tarea",
+  "fecha",
+  "codemple",
+  "empleado",
+  "estado",
+  "responsibleArea",
+  "commitmentDate",
+  "isHistorical",
+  "createdAt",
+  "updatedAt",
+];
+
+/** Ídem, modelo MaintenanceRequestTechnician. */
+const EXPECTED_MAINTENANCE_REQUEST_TECHNICIAN_COLUMNS = [
+  "id",
+  "maintenanceRequestId",
+  "technicianId",
+  "assignedAt",
+  "removedAt",
+];
+
+/** Carpetas de prisma/migrations/ en el repo, en orden — informativo, no requiere acceso a la base. */
+const REPO_MIGRATIONS = [
+  "20260908031225_initial",
+  "20260914145814_add_maintenance_request_technicians",
+  "20260914171154_add_technician_assignment_removed_at",
+  "20260915205722_add_maintenance_request_responsible_area",
+  "20260916160451_add_maintenance_request_commitment_date",
+];
+
+interface AppliedMigrationRow {
+  migration_name: string;
+  finished_at: Date | null;
+  applied_steps_count: number;
+  rolled_back_at: Date | null;
+}
+
+interface ColumnRow {
+  column_name: string;
+  data_type: string;
+  is_nullable: string;
+}
+
+interface SchemaAudit {
+  migrationsTableExists: boolean;
+  appliedMigrations: { name: string; finishedAt: string | null; rolledBackAt: string | null }[] | null;
+  repoMigrations: string[];
+  pendingMigrations: string[] | null;
+  maintenanceRequestColumns: { column: string; type: string; nullable: boolean }[] | null;
+  missingMaintenanceRequestColumns: string[] | null;
+  maintenanceRequestTechnicianColumns: { column: string; type: string; nullable: boolean }[] | null;
+  missingMaintenanceRequestTechnicianColumns: string[] | null;
+  responsibleAreaEnumExists: boolean | null;
+  errorMessageSafe: string | null;
+}
+
+/**
+ * Auditoría de solo lectura del catálogo de Postgres — nunca toca filas de
+ * `maintenance_requests` ni ninguna otra tabla de negocio. Cada sub-consulta
+ * va en su propio try/catch para que un fallo puntual (p. ej. permisos) no
+ * tumbe el resto del diagnóstico.
+ */
+async function auditSchema(): Promise<SchemaAudit> {
+  const errors: string[] = [];
+
+  let migrationsTableExists = false;
+  let appliedMigrations: SchemaAudit["appliedMigrations"] = null;
+  try {
+    const exists = await db.$queryRaw<{ exists: boolean }[]>`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = '_prisma_migrations'
+      ) AS exists
+    `;
+    migrationsTableExists = exists[0]?.exists ?? false;
+
+    if (migrationsTableExists) {
+      const rows = await db.$queryRaw<AppliedMigrationRow[]>`
+        SELECT migration_name, finished_at, applied_steps_count, rolled_back_at
+        FROM "_prisma_migrations"
+        ORDER BY started_at ASC
+      `;
+      appliedMigrations = rows.map((row) => ({
+        name: row.migration_name,
+        finishedAt: row.finished_at ? row.finished_at.toISOString() : null,
+        rolledBackAt: row.rolled_back_at ? row.rolled_back_at.toISOString() : null,
+      }));
+    }
+  } catch (error) {
+    const { message } = describeError(error);
+    errors.push(`_prisma_migrations: ${sanitizeErrorMessage(message)}`);
+  }
+
+  const pendingMigrations = appliedMigrations
+    ? REPO_MIGRATIONS.filter((name) => !appliedMigrations!.some((m) => m.name === name))
+    : null;
+
+  async function getColumns(tableName: string): Promise<{ column: string; type: string; nullable: boolean }[]> {
+    const rows = await db.$queryRaw<ColumnRow[]>`
+      SELECT column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = ${tableName}
+      ORDER BY ordinal_position
+    `;
+    return rows.map((row) => ({
+      column: row.column_name,
+      type: row.data_type,
+      nullable: row.is_nullable === "YES",
+    }));
+  }
+
+  let maintenanceRequestColumns: SchemaAudit["maintenanceRequestColumns"] = null;
+  let missingMaintenanceRequestColumns: string[] | null = null;
+  try {
+    const columns = await getColumns("maintenance_requests");
+    maintenanceRequestColumns = columns;
+    const actual = new Set(columns.map((c) => c.column));
+    missingMaintenanceRequestColumns = EXPECTED_MAINTENANCE_REQUEST_COLUMNS.filter((c) => !actual.has(c));
+  } catch (error) {
+    const { message } = describeError(error);
+    errors.push(`maintenance_requests columns: ${sanitizeErrorMessage(message)}`);
+  }
+
+  let maintenanceRequestTechnicianColumns: SchemaAudit["maintenanceRequestTechnicianColumns"] = null;
+  let missingMaintenanceRequestTechnicianColumns: string[] | null = null;
+  try {
+    const columns = await getColumns("maintenance_request_technicians");
+    maintenanceRequestTechnicianColumns = columns;
+    const actual = new Set(columns.map((c) => c.column));
+    missingMaintenanceRequestTechnicianColumns = EXPECTED_MAINTENANCE_REQUEST_TECHNICIAN_COLUMNS.filter(
+      (c) => !actual.has(c),
+    );
+  } catch (error) {
+    const { message } = describeError(error);
+    errors.push(`maintenance_request_technicians columns: ${sanitizeErrorMessage(message)}`);
+  }
+
+  let responsibleAreaEnumExists: boolean | null = null;
+  try {
+    const rows = await db.$queryRaw<{ exists: boolean }[]>`
+      SELECT EXISTS (
+        SELECT 1 FROM pg_type WHERE typname = 'MaintenanceRequestResponsibleArea'
+      ) AS exists
+    `;
+    responsibleAreaEnumExists = rows[0]?.exists ?? false;
+  } catch (error) {
+    const { message } = describeError(error);
+    errors.push(`enum MaintenanceRequestResponsibleArea: ${sanitizeErrorMessage(message)}`);
+  }
+
+  return {
+    migrationsTableExists,
+    appliedMigrations,
+    repoMigrations: REPO_MIGRATIONS,
+    pendingMigrations,
+    maintenanceRequestColumns,
+    missingMaintenanceRequestColumns,
+    maintenanceRequestTechnicianColumns,
+    missingMaintenanceRequestTechnicianColumns,
+    responsibleAreaEnumExists,
+    errorMessageSafe: errors.length > 0 ? errors.join(" | ").slice(0, 1000) : null,
+  };
+}
+
 interface ConnectionVarDiagnostic {
   present: boolean;
   hostname: string | null;
@@ -101,9 +281,10 @@ function diagnoseConnectionVar(value: string | undefined): ConnectionVarDiagnost
 }
 
 export async function GET() {
-  const prismaDiagnostic = await diagnosePrisma();
+  const [prismaDiagnostic, schemaAudit] = await Promise.all([diagnosePrisma(), auditSchema()]);
   return NextResponse.json({
     ...prismaDiagnostic,
+    schemaAudit,
     databaseUrl: diagnoseConnectionVar(process.env.DATABASE_URL),
     directUrl: diagnoseConnectionVar(process.env.DIRECT_URL),
     vercelEnv: process.env.VERCEL_ENV ?? null,
