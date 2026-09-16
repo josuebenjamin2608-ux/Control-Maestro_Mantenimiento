@@ -4,6 +4,7 @@ import { ArrowLeft, Building2, UserRound } from "lucide-react";
 
 import { AppShell } from "@/components/layout/app-shell";
 import { HistoricalBadge } from "@/components/imports/outcome-badge";
+import { CommitmentDateField } from "@/components/solicitudes/commitment-date-field";
 import { EstadoBadge } from "@/components/solicitudes/estado-badge";
 import { MinutaTimeline } from "@/components/solicitudes/minuta-timeline";
 import { ResponsibleAreaSelect } from "@/components/solicitudes/responsible-area-select";
@@ -107,32 +108,39 @@ export default async function SolicitudDetailPage({
             </div>
             <CardDescription>Información de la solicitud tal como fue importada.</CardDescription>
           </CardHeader>
-          <CardContent className="flex flex-col gap-6">
-            <div>
-              <SectionLabel>Identificación</SectionLabel>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                <Field label="PARTE" value={request.parte} />
-                <Field label="Máquina" value={request.maquina} />
-                <Field label="Código de máquina" value={request.codigo} />
+          <CardContent className="flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-8">
+            <div className="flex flex-1 flex-col gap-6">
+              <div>
+                <SectionLabel>Identificación</SectionLabel>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  <Field label="PARTE" value={request.parte} />
+                  <Field label="Máquina" value={request.maquina} />
+                  <Field label="Código de máquina" value={request.codigo} />
+                </div>
+              </div>
+
+              <div>
+                <SectionLabel>Solicitud</SectionLabel>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  <Field label="Fecha de solicitud" value={formatCalendarDate(request.fecha)} />
+                  <Field label="Empleado solicitante" value={request.empleado} />
+                  <Field label="Código de empleado" value={request.codemple} />
+                </div>
+              </div>
+
+              <div>
+                <SectionLabel>Detalle del problema</SectionLabel>
+                <div className="grid grid-cols-1 gap-4">
+                  <Field label="Pieza afectada" value={request.pieza} />
+                  <TextBlock label="Problema" value={request.problema} />
+                  <TextBlock label="Tarea" value={request.tarea} />
+                </div>
               </div>
             </div>
 
-            <div>
-              <SectionLabel>Solicitud</SectionLabel>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                <Field label="Fecha de solicitud" value={formatCalendarDate(request.fecha)} />
-                <Field label="Empleado solicitante" value={request.empleado} />
-                <Field label="Código de empleado" value={request.codemple} />
-              </div>
-            </div>
-
-            <div>
-              <SectionLabel>Detalle del problema</SectionLabel>
-              <div className="grid grid-cols-1 gap-4">
-                <Field label="Pieza afectada" value={request.pieza} />
-                <TextBlock label="Problema" value={request.problema} />
-                <TextBlock label="Tarea" value={request.tarea} />
-              </div>
+            <div className="flex flex-col gap-2 lg:w-56 lg:shrink-0 lg:border-l lg:border-border lg:pl-6">
+              <SectionLabel>Fecha compromiso</SectionLabel>
+              <CommitmentDateField maintenanceRequestId={request.id} value={request.commitmentDate} />
             </div>
           </CardContent>
         </Card>

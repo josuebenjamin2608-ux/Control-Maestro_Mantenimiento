@@ -45,3 +45,43 @@ export async function setMaintenanceRequestResponsibleArea(
   revalidatePath("/");
   return { ok: true, data: null };
 }
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Cambia la fecha compromiso de una Solicitud, o la deja sin definir
+ * (`isoDate: null`). Dato propio de gestión (no viene del Excel, no se toca
+ * durante la importación — ver maintenance-request-import.service.ts).
+ * `isoDate` es "YYYY-MM-DD" (valor crudo de un `<input type="date">"`); se
+ * ancla a medianoche UTC de ese día calendario, mismo criterio que FECHA
+ * (ver src/lib/dates.ts) para que nunca se desplace por zona horaria.
+ */
+export async function setMaintenanceRequestCommitmentDate(
+  maintenanceRequestId: string,
+  isoDate: string | null,
+): Promise<ActionResult<null>> {
+  let commitmentDate: Date | null = null;
+  if (isoDate !== null) {
+    if (!ISO_DATE_RE.test(isoDate)) {
+      return { ok: false, error: "Fecha compromiso inválida." };
+    }
+    const [year, month, day] = isoDate.split("-").map(Number);
+    commitmentDate = new Date(Date.UTC(year, month - 1, day));
+  }
+
+  const request = await db.maintenanceRequest.findUnique({
+    where: { id: maintenanceRequestId },
+    select: { parte: true },
+  });
+  if (!request) {
+    return { ok: false, error: "La solicitud no existe." };
+  }
+
+  await db.maintenanceRequest.update({
+    where: { id: maintenanceRequestId },
+    data: { commitmentDate },
+  });
+
+  revalidatePath(`/solicitudes/${encodeURIComponent(request.parte)}`);
+  return { ok: true, data: null };
+}

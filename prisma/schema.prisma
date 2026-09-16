@@ -353,6 +353,13 @@ model MaintenanceRequest {
   /// tanto para solicitudes nuevas como para todo el histórico existente.
   responsibleArea MaintenanceRequestResponsibleArea?
 
+  /// Fecha compromiso: dato propio de gestión (fecha calendario pura, misma
+  /// convención UTC que `fecha`), establecido manualmente desde la ficha de
+  /// la Solicitud. No viene del Excel ni se toca durante la importación (ver
+  /// maintenance-request-import.service.ts) — se conserva tal cual ante
+  /// reimportaciones, igual que responsibleArea.
+  commitmentDate DateTime?
+
   /// true si esta solicitud se cargó marcando explícitamente la importación
   /// como "histórico inicial" (nunca se infiere automáticamente).
   isHistorical Boolean @default(false)
