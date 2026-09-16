@@ -4,18 +4,16 @@ import { ArrowRight, X } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { RecentActivityPanel } from "@/components/layout/recent-activity-panel";
 import { RouteTabs } from "@/components/layout/route-tabs";
-import { BacklogCard } from "@/components/indicadores/backlog-card";
 import { PeriodFilterBar } from "@/components/indicadores/period-filter-bar";
 import { EstadoBreakdownCard } from "@/components/dashboard/estado-breakdown-card";
 import { ResponsibleAreaCard } from "@/components/dashboard/responsible-area-card";
 import { SolicitudesTable } from "@/components/solicitudes/solicitudes-table";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { ESTADO_BUCKET_LABELS, type EstadoBucket } from "@/lib/estado";
 import { formatPeriodLabel, getPeriodRange, type Period } from "@/lib/period";
 import { cn } from "@/lib/utils";
 import {
   getOpenBucketCounts,
-  getOpenRequestsAging,
   getOpenRequestsByResponsibleArea,
   listOperationalMaintenanceRequests,
   type OpenBucketCounts,
@@ -134,7 +132,7 @@ export default async function DashboardPage({
   // ante un year/month inválido en la URL. El período solo se usa acá para
   // "Solicitudes del mes" y "Atendidas del mes" (métricas de actividad DEL
   // MES); las solicitudes ABIERTAS son intencionalmente independientes de
-  // este período — ver getOpenBucketCounts/getOpenRequestsAging.
+  // este período — ver getOpenBucketCounts.
   const now = new Date();
   const currentYear = now.getFullYear();
   const currentMonth = now.getMonth() + 1;
@@ -164,7 +162,7 @@ export default async function DashboardPage({
   // otro) es intencionalmente independiente de FECHA.
   const usesPeriod = bucketParam === "todas" || selectedBucket === "atendida";
 
-  const [years, stats, openCounts, aging, operationalRequests, responsibleAreaSummary] =
+  const [years, stats, openCounts, operationalRequests, responsibleAreaSummary] =
     await Promise.all([
       getAvailableYears(),
       // "Solicitudes del mes" y "Atendidas del mes" SÍ dependen del período
@@ -174,7 +172,6 @@ export default async function DashboardPage({
       // filtro de FECHA — el estado operativo real actual (regla de negocio
       // de esta tarea).
       getOpenBucketCounts(),
-      getOpenRequestsAging(),
       listOperationalMaintenanceRequests({
         bucket: selectedBucket,
         period: usesPeriod ? { start, end } : undefined,
@@ -369,22 +366,6 @@ export default async function DashboardPage({
                 otros: openCounts.otros,
               }}
             />
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-sm text-foreground">Antigüedad de abiertas</CardTitle>
-                <CardDescription>
-                  Subconjuntos por antigüedad de las Solicitudes abiertas — independiente del
-                  período seleccionado.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <BacklogCard
-                  backlog={aging}
-                  totalCaption="Total de solicitudes abiertas (ESTADO != Realizado), sin importar la fecha"
-                />
-              </CardContent>
-            </Card>
 
             <ResponsibleAreaCard summary={responsibleAreaSummary} />
 

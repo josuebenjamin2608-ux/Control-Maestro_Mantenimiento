@@ -174,10 +174,10 @@ export { getBucketStatValue } from "@/lib/estado";
  * Where-clause real para "ESTADO != Realizado": construida a partir de los
  * valores DISTINCT de ESTADO realmente presentes (vía classifyEstado), nunca
  * de una lista inventada. Única fuente de verdad de "abierta" compartida por
- * el Dashboard (listOperationalMaintenanceRequests/getOpenBucketCounts/
- * getOpenRequestsAging más abajo) e Indicadores (getBacklogBeforePeriod/
- * getBacklogBreakdown en indicators.service.ts), para no mantener dos
- * definiciones que puedan divergir.
+ * el Dashboard (listOperationalMaintenanceRequests/getOpenBucketCounts) e
+ * Indicadores (getBacklogBeforePeriod/getBacklogBreakdown en
+ * indicators.service.ts), para no mantener dos definiciones que puedan
+ * divergir.
  */
 export async function getNonAtendidaEstadoWhere(): Promise<Prisma.MaintenanceRequestWhereInput> {
   const distinctEstados = await getDistinctEstados();
@@ -341,44 +341,6 @@ export async function getOpenBucketCounts(): Promise<OpenBucketCounts> {
     else counts.otros += count;
   }
   return counts;
-}
-
-export interface OpenRequestsAging {
-  /** Todas las solicitudes abiertas (ESTADO != Realizado) — mismo universo que getOpenBucketCounts().totalAbiertas. */
-  total: number;
-  over7Days: number;
-  over15Days: number;
-  over30Days: number;
-}
-
-/**
- * Antigüedad del total de solicitudes abiertas, SIN filtro de FECHA — a
- * diferencia de `getBacklogBreakdown` (indicators.service.ts, usado por
- * /indicadores), donde `total` se acota a "anterior al período
- * seleccionado". Acá `total` es exactamente "Solicitudes abiertas" del
- * Dashboard: los tres umbrales de antigüedad (+7/+15/+30 días, siempre
- * relativos a hoy) son subconjuntos de ese mismo universo, no una lista
- * aparte.
- */
-export async function getOpenRequestsAging(): Promise<OpenRequestsAging> {
-  const estadoWhere = await getNonAtendidaEstadoWhere();
-  const now = new Date();
-  const day = 24 * 60 * 60 * 1000;
-
-  const [total, over7Days, over15Days, over30Days] = await Promise.all([
-    db.maintenanceRequest.count({ where: estadoWhere }),
-    db.maintenanceRequest.count({
-      where: { fecha: { lt: new Date(now.getTime() - 7 * day) }, ...estadoWhere },
-    }),
-    db.maintenanceRequest.count({
-      where: { fecha: { lt: new Date(now.getTime() - 15 * day) }, ...estadoWhere },
-    }),
-    db.maintenanceRequest.count({
-      where: { fecha: { lt: new Date(now.getTime() - 30 * day) }, ...estadoWhere },
-    }),
-  ]);
-
-  return { total, over7Days, over15Days, over30Days };
 }
 
 export interface ResponsibleAreaSummary {
