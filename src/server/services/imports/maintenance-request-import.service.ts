@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import type { MaintenanceRequest, Prisma } from "@/generated/prisma/client";
 import type { MaintenanceRequestRow, ParsedMaintenanceRequestRowResult } from "@/lib/validations/imports";
 import { sendMaintenanceRequestCreatedEvent } from "@/server/services/vento.service";
+import { sendMaintenanceRequestCreatedNotification } from "@/server/services/telegram.service";
 
 import {
   MAINTENANCE_REQUEST_HEADERS,
@@ -302,11 +303,16 @@ export async function applyMaintenanceRequestImport(
   // confirmada en PostgreSQL): dispara maintenance_request.created
   // exclusivamente para filas NEW recién persistidas — nunca para
   // MODIFIED/UNCHANGED/ERROR, y nunca de nuevo para un PARTE reimportado
-  // (que ya no clasifica como NEW). Promise.allSettled + que
-  // sendMaintenanceRequestCreatedEvent nunca lance: un fallo del webhook
-  // jamás debe afectar una importación que ya se guardó correctamente.
+  // (que ya no clasifica como NEW). Vento y Telegram son dos canales
+  // independientes del mismo evento — ninguno depende del otro, y
+  // Promise.allSettled + que ninguna de las dos funciones lance jamás
+  // garantiza que un fallo de cualquiera de los dos nunca afecte a la
+  // importación (ya guardada) ni al otro canal.
   if (newlyCreated.length > 0) {
-    await Promise.allSettled(newlyCreated.map((request) => sendMaintenanceRequestCreatedEvent(request)));
+    await Promise.allSettled([
+      ...newlyCreated.map((request) => sendMaintenanceRequestCreatedEvent(request)),
+      ...newlyCreated.map((request) => sendMaintenanceRequestCreatedNotification(request)),
+    ]);
   }
 
   return result;
