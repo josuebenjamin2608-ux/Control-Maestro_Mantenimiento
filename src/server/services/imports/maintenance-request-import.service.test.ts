@@ -204,4 +204,32 @@ describe("applyMaintenanceRequestImport — disparo de notificaciones", () => {
     expect(sendVentoMock).not.toHaveBeenCalled();
     expect(sendTelegramMock).not.toHaveBeenCalled();
   });
+
+  it("una solicitud NEW se persiste correctamente aunque el envío a Telegram falle", async () => {
+    sendTelegramMock.mockRejectedValueOnce(new Error("Telegram caído (prueba)"));
+
+    const result = await applyMaintenanceRequestImport({
+      fileName: "wiring-test-telegram-fails.xlsx",
+      isHistorical: false,
+      rows: [row(1, "00000006")], // NEW
+    });
+
+    expect(result.summary.newCount).toBe(1);
+    expect(fakeRequests.get("00000006")).toBeTruthy();
+    expect(sendVentoMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("una solicitud NEW se persiste correctamente aunque el envío a Vento falle (mismo mecanismo que un Vento deshabilitado: nunca afecta al llamador)", async () => {
+    sendVentoMock.mockRejectedValueOnce(new Error("Vento caído (prueba)"));
+
+    const result = await applyMaintenanceRequestImport({
+      fileName: "wiring-test-vento-fails.xlsx",
+      isHistorical: false,
+      rows: [row(1, "00000007")], // NEW
+    });
+
+    expect(result.summary.newCount).toBe(1);
+    expect(fakeRequests.get("00000007")).toBeTruthy();
+    expect(sendTelegramMock).toHaveBeenCalledTimes(1);
+  });
 });

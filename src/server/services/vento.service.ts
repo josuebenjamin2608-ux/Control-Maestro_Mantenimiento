@@ -92,8 +92,21 @@ function buildMaintenanceRequestCreatedPayload(
  * diagnóstico, con categorías fijas y saneadas (nunca la URL completa, que
  * puede llevar token/firma embebida, ni el mensaje crudo de fetch, que en
  * Node repite el string de entrada tal cual).
+ *
+ * Feature flag VENTO_ENABLED: la integración queda deshabilitada por
+ * defecto (variable ausente, vacía, o cualquier valor distinto de la
+ * cadena exacta "true") — limpieza controlada mientras Telegram queda como
+ * único canal externo activo, sin borrar el código ni las pruebas de
+ * Vento, para poder reactivarlo más adelante solo cambiando esta variable.
+ * Deshabilitado: retorna de inmediato, sin leer VENTO_MAINTENANCE_REQUEST_CREATED_URL,
+ * sin intentar fetch, y sin loggear nada — es un estado intencional, no un
+ * error de configuración.
  */
 export async function sendMaintenanceRequestCreatedEvent(request: MaintenanceRequest): Promise<void> {
+  if (process.env.VENTO_ENABLED !== "true") {
+    return;
+  }
+
   const url = process.env.VENTO_MAINTENANCE_REQUEST_CREATED_URL;
   if (!url) {
     console.warn(

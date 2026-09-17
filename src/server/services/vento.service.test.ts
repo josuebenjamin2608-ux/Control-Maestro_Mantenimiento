@@ -4,6 +4,7 @@ import type { MaintenanceRequest } from "@/generated/prisma/client";
 import { sendMaintenanceRequestCreatedEvent } from "./vento.service";
 
 const ENV_KEY = "VENTO_MAINTENANCE_REQUEST_CREATED_URL";
+const ENABLED_KEY = "VENTO_ENABLED";
 
 /** PARTE deliberadamente reconocible en los asserts de "no se filtra en logs". */
 const SECRET_TOKEN = "SECRET_TOKEN_DO_NOT_LEAK";
@@ -41,6 +42,7 @@ function assertNeverLogged(spy: ReturnType<typeof vi.spyOn>, forbidden: string) 
 
 describe("sendMaintenanceRequestCreatedEvent", () => {
   const originalEnv = process.env[ENV_KEY];
+  const originalEnabled = process.env[ENABLED_KEY];
   let fetchMock: ReturnType<typeof vi.fn>;
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
@@ -50,17 +52,23 @@ describe("sendMaintenanceRequestCreatedEvent", () => {
     vi.stubGlobal("fetch", fetchMock);
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Todas las pruebas de este describe ejercen el comportamiento con la
+    // integración habilitada (VENTO_ENABLED="true"); el describe siguiente
+    // cubre específicamente el estado deshabilitado (feature flag).
+    process.env[ENABLED_KEY] = "true";
   });
 
   afterEach(() => {
     if (originalEnv === undefined) delete process.env[ENV_KEY];
     else process.env[ENV_KEY] = originalEnv;
+    if (originalEnabled === undefined) delete process.env[ENABLED_KEY];
+    else process.env[ENABLED_KEY] = originalEnabled;
     vi.unstubAllGlobals();
     errorSpy.mockRestore();
     warnSpy.mockRestore();
   });
 
-  it("envía el evento cuando la variable de entorno es una URL https válida", async () => {
+  it("envía el evento cuando VENTO_ENABLED='true' y la URL es https válida (conserva el comportamiento actual)", async () => {
     process.env[ENV_KEY] = `https://cloud.vento.build/webhook?token=${SECRET_TOKEN}`;
     fetchMock.mockResolvedValue({ ok: true, status: 200 });
 
@@ -162,5 +170,72 @@ describe("sendMaintenanceRequestCreatedEvent", () => {
 
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(errorSpy.mock.calls[0][0]).toContain("timeout");
+  });
+});
+
+describe("sendMaintenanceRequestCreatedEvent — feature flag VENTO_ENABLED", () => {
+  const originalEnv = process.env[ENV_KEY];
+  const originalEnabled = process.env[ENABLED_KEY];
+  let fetchMock: ReturnType<typeof vi.fn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Con la integración habilitada, esta URL enviaría correctamente (ver
+    // describe anterior) — así cada prueba de este bloque demuestra que el
+    // flag corta el flujo ANTES de llegar a la validación de URL/fetch,
+    // no que el envío haya fallado por otro motivo.
+    process.env[ENV_KEY] = `https://cloud.vento.build/webhook?token=${SECRET_TOKEN}`;
+  });
+
+  afterEach(() => {
+    if (originalEnv === undefined) delete process.env[ENV_KEY];
+    else process.env[ENV_KEY] = originalEnv;
+    if (originalEnabled === undefined) delete process.env[ENABLED_KEY];
+    else process.env[ENABLED_KEY] = originalEnabled;
+    vi.unstubAllGlobals();
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it("no llama a fetch ni loggea nada cuando VENTO_ENABLED no está definida", async () => {
+    delete process.env[ENABLED_KEY];
+
+    await expect(sendMaintenanceRequestCreatedEvent(makeRequest())).resolves.toBeUndefined();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("no llama a fetch ni loggea nada cuando VENTO_ENABLED='false'", async () => {
+    process.env[ENABLED_KEY] = "false";
+
+    await expect(sendMaintenanceRequestCreatedEvent(makeRequest())).resolves.toBeUndefined();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("no llama a fetch con ningún valor distinto de la cadena exacta 'true' (p. ej. 'TRUE' o '1')", async () => {
+    for (const value of ["TRUE", "1", "yes", " true"]) {
+      fetchMock.mockClear();
+      process.env[ENABLED_KEY] = value;
+
+      await sendMaintenanceRequestCreatedEvent(makeRequest());
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  });
+
+  it("una solicitud NEW no se ve afectada: la función resuelve sin lanzar aunque Vento esté deshabilitado", async () => {
+    delete process.env[ENABLED_KEY];
+
+    await expect(sendMaintenanceRequestCreatedEvent(makeRequest())).resolves.toBeUndefined();
   });
 });
