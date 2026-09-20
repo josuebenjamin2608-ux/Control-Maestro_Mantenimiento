@@ -77,6 +77,32 @@ function classifyFetchError(error: unknown): string {
   return "error de conexión";
 }
 
+interface TelegramApiResponseBody {
+  ok?: boolean;
+  error_code?: number;
+  description?: string;
+}
+
+/**
+ * Trunca la descripción que devuelve la propia API de Telegram. La genera
+ * Telegram, no nuestro código, así que nunca puede contener el token ni la
+ * URL de la API (nunca se los enviamos de vuelta) — se acota igual por
+ * defensa en profundidad, nunca se loggea el body completo.
+ */
+function sanitizeTelegramDescription(description: unknown): string {
+  if (typeof description !== "string" || description.length === 0) return "sin descripción";
+  return description.slice(0, 200);
+}
+
+/** `response.json()` solo puede leerse una vez; si el cuerpo no es JSON válido, se trata como "sin información adicional" en vez de propagar la excepción. */
+async function parseTelegramResponseBody(response: Response): Promise<TelegramApiResponseBody | null> {
+  try {
+    return (await response.json()) as TelegramApiResponseBody;
+  } catch {
+    return null;
+  }
+}
+
 /** YYYY-MM-DD -> igual formato/zona (UTC) que el resto de la interfaz, ver src/lib/dates.ts. */
 function buildNotificationText(request: MaintenanceRequest): string {
   const parteDisplay = formatParteDisplay(request.parte);
@@ -108,11 +134,17 @@ function buildNotificationText(request: MaintenanceRequest): string {
 /**
  * Envía la notificación de `maintenance_request.created` al grupo de
  * Telegram. Nunca lanza: un fallo (variables sin configurar, chat_id
- * inválido, timeout, red caída, respuesta no-2xx de la API de Telegram) no
- * debe afectar la importación, que ya quedó guardada en PostgreSQL antes de
- * llamar a esta función — solo se registra para diagnóstico, con categorías
+ * inválido, timeout, red caída, respuesta no-2xx o body.ok=false de la API
+ * de Telegram) no debe afectar la importación, que ya quedó guardada en
+ * PostgreSQL antes de llamar a esta función.
+ *
+ * Registra el resultado en los tres casos (éxito, fallo HTTP/API, fallo de
+ * red) — antes solo se loggeaba el fallo, así que un envío exitoso era
+ * indistinguible de una llamada que nunca ocurrió. Siempre con categorías
  * fijas y saneadas: nunca el token, nunca la URL de la API de Telegram (que
- * lo lleva embebido), nunca el mensaje crudo de fetch.
+ * lo lleva embebido), nunca el mensaje crudo de fetch, nunca el body
+ * completo de la respuesta de Telegram (solo error_code/description ya
+ * truncados cuando aplica).
  */
 export async function sendMaintenanceRequestCreatedNotification(
   request: MaintenanceRequest,
@@ -142,10 +174,26 @@ export async function sendMaintenanceRequestCreatedNotification(
       signal: controller.signal,
     });
 
+    // La API de Telegram normalmente hace coincidir su propio campo JSON
+    // "ok" con el status HTTP, pero no está garantizado — se valida cada
+    // uno por separado en vez de asumir que uno implica el otro. Nunca se
+    // loggea el body completo, solo error_code/description ya saneados.
+    const body = await parseTelegramResponseBody(response);
+
     if (!response.ok) {
       console.error(
-        `[telegram] La API de Telegram respondió ${response.status} para PARTE ${request.parte}.`,
+        `[telegram] La API de Telegram respondió HTTP ${response.status} para PARTE ${request.parte}` +
+          (body?.error_code !== undefined ? ` (error_code ${body.error_code})` : "") +
+          `: ${sanitizeTelegramDescription(body?.description)}`,
       );
+    } else if (!body?.ok) {
+      console.error(
+        `[telegram] La API de Telegram respondió HTTP ${response.status} pero body.ok=false para PARTE ${request.parte}` +
+          (body?.error_code !== undefined ? ` (error_code ${body.error_code})` : "") +
+          `: ${sanitizeTelegramDescription(body?.description)}`,
+      );
+    } else {
+      console.log(`[telegram] maintenance_request.created enviado correctamente para PARTE ${request.parte}.`);
     }
   } catch (error) {
     console.error(

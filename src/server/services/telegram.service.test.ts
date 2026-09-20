@@ -40,16 +40,27 @@ function assertNeverLogged(spy: ReturnType<typeof vi.spyOn>, forbidden: string) 
   }
 }
 
+/** Respuesta fetch simulada — incluye `.json()` porque el código real ahora siempre intenta leer el body. */
+function makeFetchResponse(init: { ok: boolean; status: number; body?: unknown }) {
+  return {
+    ok: init.ok,
+    status: init.status,
+    json: async () => init.body ?? {},
+  };
+}
+
 describe("sendMaintenanceRequestCreatedNotification", () => {
   const originalToken = process.env[TOKEN_KEY];
   const originalChatId = process.env[CHAT_ID_KEY];
   let fetchMock: ReturnType<typeof vi.fn>;
+  let logSpy: ReturnType<typeof vi.spyOn>;
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
   });
@@ -60,14 +71,17 @@ describe("sendMaintenanceRequestCreatedNotification", () => {
     if (originalChatId === undefined) delete process.env[CHAT_ID_KEY];
     else process.env[CHAT_ID_KEY] = originalChatId;
     vi.unstubAllGlobals();
+    logSpy.mockRestore();
     errorSpy.mockRestore();
     warnSpy.mockRestore();
   });
 
-  it("envía la notificación cuando token y chat_id están configurados correctamente", async () => {
+  it("envía la notificación cuando token y chat_id están configurados correctamente (HTTP 200 + body.ok=true)", async () => {
     process.env[TOKEN_KEY] = FAKE_TOKEN;
     process.env[CHAT_ID_KEY] = FAKE_CHAT_ID;
-    fetchMock.mockResolvedValue({ ok: true, status: 200 });
+    fetchMock.mockResolvedValue(
+      makeFetchResponse({ ok: true, status: 200, body: { ok: true, result: { message_id: 42 } } }),
+    );
 
     await sendMaintenanceRequestCreatedNotification(makeRequest());
 
@@ -83,6 +97,14 @@ describe("sendMaintenanceRequestCreatedNotification", () => {
     // ...pero el valor interno nunca se reemplaza: no se usa para construir el link.
     expect(body.text).not.toContain("Fuga de aceite".repeat(2));
     expect(errorSpy).not.toHaveBeenCalled();
+
+    // Registra explícitamente el éxito — antes esto era indistinguible de "nunca se llamó".
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy.mock.calls[0][0]).toBe(
+      "[telegram] maintenance_request.created enviado correctamente para PARTE 00002119.",
+    );
+    assertNeverLogged(logSpy, FAKE_TOKEN);
+    assertNeverLogged(logSpy, "api.telegram.org/bot");
   });
 
   it("omite en silencio (solo warning) cuando falta TELEGRAM_BOT_TOKEN", async () => {
@@ -140,16 +162,48 @@ describe("sendMaintenanceRequestCreatedNotification", () => {
     assertNeverLogged(errorSpy, "api.telegram.org/bot");
   });
 
-  it("nunca registra el token cuando la API de Telegram responde con status no-2xx", async () => {
+  it("registra status HTTP y error saneado cuando la API de Telegram responde con status no-2xx", async () => {
     process.env[TOKEN_KEY] = FAKE_TOKEN;
     process.env[CHAT_ID_KEY] = FAKE_CHAT_ID;
-    fetchMock.mockResolvedValue({ ok: false, status: 401 });
+    fetchMock.mockResolvedValue(
+      makeFetchResponse({
+        ok: false,
+        status: 401,
+        body: { ok: false, error_code: 401, description: "Unauthorized" },
+      }),
+    );
 
     await sendMaintenanceRequestCreatedNotification(makeRequest());
 
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(errorSpy.mock.calls[0][0]).toContain("401");
+    expect(errorSpy.mock.calls[0][0]).toContain("Unauthorized");
+    expect(logSpy).not.toHaveBeenCalled();
     assertNeverLogged(errorSpy, FAKE_TOKEN);
+    assertNeverLogged(errorSpy, "api.telegram.org/bot");
+  });
+
+  it("registra error_code y descripción saneada cuando la API responde HTTP 200 pero body.ok=false", async () => {
+    process.env[TOKEN_KEY] = FAKE_TOKEN;
+    process.env[CHAT_ID_KEY] = FAKE_CHAT_ID;
+    fetchMock.mockResolvedValue(
+      makeFetchResponse({
+        ok: true,
+        status: 200,
+        body: { ok: false, error_code: 403, description: "Forbidden: bot was kicked from the group chat" },
+      }),
+    );
+
+    await sendMaintenanceRequestCreatedNotification(makeRequest());
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0][0]).toContain("body.ok=false");
+    expect(errorSpy.mock.calls[0][0]).toContain("403");
+    expect(errorSpy.mock.calls[0][0]).toContain("Forbidden: bot was kicked from the group chat");
+    // No se registró ningún éxito para este PARTE.
+    expect(logSpy).not.toHaveBeenCalled();
+    assertNeverLogged(errorSpy, FAKE_TOKEN);
+    assertNeverLogged(errorSpy, "api.telegram.org/bot");
   });
 
   it("nunca lanza: un fallo de Telegram no debe poder hacer fallar al llamador (la importación) ni hacer rollback", async () => {
