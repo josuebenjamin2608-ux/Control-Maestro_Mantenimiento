@@ -10,6 +10,9 @@ import { Prisma } from "@/generated/prisma/client";
  * Expone ÚNICAMENTE metadata no sensible:
  * - si DATABASE_URL/DIRECT_URL están definidas y el hostname de cada una
  *   (nunca usuario, contraseña, puerto, query string ni la URL completa)
+ * - resumen seguro adicional (databaseUrlSummary/directUrlSummary): mismo
+ *   hostname + nombre de base de datos (pathname sin el "/" inicial) —
+ *   igual de acotado, nunca username/password/query string/URL completa
  * - VERCEL_ENV y VERCEL_URL
  * - el resultado de una prueba real de Prisma contra la base (ok,
  *   databaseConnected, errorCode, errorMessageSafe) — nunca el mensaje
@@ -280,6 +283,28 @@ function diagnoseConnectionVar(value: string | undefined): ConnectionVarDiagnost
   }
 }
 
+/**
+ * Resumen SEGURO y mínimo de una URL de conexión, en el formato exacto
+ * pedido para comparar DATABASE_URL vs DIRECT_URL: solo hostname y nombre
+ * de base (pathname sin el "/" inicial). Nunca username, nunca password,
+ * nunca query string, nunca la URL completa.
+ */
+type ConnectionVarSummary =
+  | { hostname: string; database: string | null }
+  | "not configured"
+  | "invalid URL";
+
+function summarizeConnectionVar(value: string | undefined): ConnectionVarSummary {
+  if (!value) return "not configured";
+  try {
+    const parsed = new URL(value);
+    const database = parsed.pathname.replace(/^\//, "");
+    return { hostname: parsed.hostname, database: database || null };
+  } catch {
+    return "invalid URL";
+  }
+}
+
 export async function GET() {
   const [prismaDiagnostic, schemaAudit] = await Promise.all([diagnosePrisma(), auditSchema()]);
   return NextResponse.json({
@@ -287,6 +312,8 @@ export async function GET() {
     schemaAudit,
     databaseUrl: diagnoseConnectionVar(process.env.DATABASE_URL),
     directUrl: diagnoseConnectionVar(process.env.DIRECT_URL),
+    databaseUrlSummary: summarizeConnectionVar(process.env.DATABASE_URL),
+    directUrlSummary: summarizeConnectionVar(process.env.DIRECT_URL),
     vercelEnv: process.env.VERCEL_ENV ?? null,
     vercelUrl: process.env.VERCEL_URL ?? null,
   });
