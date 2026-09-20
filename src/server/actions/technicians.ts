@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { technicianInputSchema, type TechnicianInput } from "@/lib/validations/technicians";
 import { Prisma } from "@/generated/prisma/client";
+import { sendTechnicianAssignedNotification } from "@/server/services/telegram.service";
 
 export type ActionResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
@@ -30,14 +31,29 @@ function isUniqueConstraintError(error: unknown): boolean {
  * (solicitud, técnico), crea una fila NUEVA en vez de reutilizar la vieja —
  * así el historial conserva cada ciclo de asignación/retiro por separado.
  * Nunca crea técnicos nuevos.
+ *
+ * Notifica a Telegram (evento `technician_assigned`) exclusivamente cuando
+ * esta llamada realmente crea la fila nueva en MaintenanceRequestTechnician
+ * — nunca cuando el técnico ya estaba activamente asignado (evita
+ * duplicar la notificación por un reintento o un doble clic sobre un
+ * técnico ya asignado). Regla estricta: BD create exitoso -> Telegram,
+ * nunca al revés; sendTechnicianAssignedNotification ya está diseñada para
+ * nunca lanzar, pero igual se envuelve en Promise.allSettled (mismo
+ * patrón defensivo que applyMaintenanceRequestImport en
+ * maintenance-request-import.service.ts) para que, aunque ese contrato se
+ * violara alguna vez, jamás pueda propagar una excepción que revierta la
+ * asignación ya guardada ni que este Server Action responda como fallido.
  */
 export async function assignTechnicianToRequest(
   maintenanceRequestId: string,
   technicianId: string,
 ): Promise<ActionResult<null>> {
   const [request, technician] = await Promise.all([
-    db.maintenanceRequest.findUnique({ where: { id: maintenanceRequestId }, select: { parte: true } }),
-    db.technician.findUnique({ where: { id: technicianId }, select: { id: true, isActive: true } }),
+    db.maintenanceRequest.findUnique({ where: { id: maintenanceRequestId } }),
+    db.technician.findUnique({
+      where: { id: technicianId },
+      select: { id: true, isActive: true, fullName: true },
+    }),
   ]);
 
   if (!request) {
@@ -59,6 +75,9 @@ export async function assignTechnicianToRequest(
     await db.maintenanceRequestTechnician.create({
       data: { maintenanceRequestId, technicianId },
     });
+
+    // Solo se llega acá si el create de arriba ya confirmó en PostgreSQL.
+    await Promise.allSettled([sendTechnicianAssignedNotification(request, technician.fullName)]);
   }
 
   revalidatePath(`/solicitudes/${encodeURIComponent(request.parte)}`);

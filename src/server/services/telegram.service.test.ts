@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MaintenanceRequest } from "@/generated/prisma/client";
-import { sendMaintenanceRequestCreatedNotification } from "./telegram.service";
+import {
+  sendMaintenanceRequestCreatedNotification,
+  sendTechnicianAssignedNotification,
+} from "./telegram.service";
 
 const TOKEN_KEY = "TELEGRAM_BOT_TOKEN";
 const CHAT_ID_KEY = "TELEGRAM_MAINTENANCE_CHAT_ID";
@@ -225,5 +228,102 @@ describe("sendMaintenanceRequestCreatedNotification", () => {
 
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(errorSpy.mock.calls[0][0]).toContain("timeout");
+  });
+});
+
+describe("sendTechnicianAssignedNotification", () => {
+  const originalToken = process.env[TOKEN_KEY];
+  const originalChatId = process.env[CHAT_ID_KEY];
+  const originalVercelUrl = process.env.VERCEL_URL;
+  let fetchMock: ReturnType<typeof vi.fn>;
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Vercel la provee automáticamente en todo deployment real — se fija acá
+    // para poder verificar el enlace, que en un entorno sin ella se omite.
+    process.env.VERCEL_URL = "simi.example.vercel.app";
+  });
+
+  afterEach(() => {
+    if (originalToken === undefined) delete process.env[TOKEN_KEY];
+    else process.env[TOKEN_KEY] = originalToken;
+    if (originalChatId === undefined) delete process.env[CHAT_ID_KEY];
+    else process.env[CHAT_ID_KEY] = originalChatId;
+    if (originalVercelUrl === undefined) delete process.env.VERCEL_URL;
+    else process.env.VERCEL_URL = originalVercelUrl;
+    vi.unstubAllGlobals();
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it("envía la notificación con el formato esperado cuando token y chat_id están configurados (HTTP 200 + body.ok=true)", async () => {
+    process.env[TOKEN_KEY] = FAKE_TOKEN;
+    process.env[CHAT_ID_KEY] = FAKE_CHAT_ID;
+    fetchMock.mockResolvedValue(
+      makeFetchResponse({ ok: true, status: 200, body: { ok: true, result: { message_id: 7 } } }),
+    );
+
+    await sendTechnicianAssignedNotification(makeRequest(), "Benjamin Arzuza");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [calledUrl, init] = fetchMock.mock.calls[0];
+    expect(calledUrl).toBe(`https://api.telegram.org/bot${FAKE_TOKEN}/sendMessage`);
+    const body = JSON.parse(init.body);
+    expect(body.chat_id).toBe(FAKE_CHAT_ID);
+    expect(body.parse_mode).toBe("HTML");
+    expect(body.text).toContain("ASIGNACIÓN DE MANTENIMIENTO");
+    expect(body.text).toContain("Técnico asignado:</b> Benjamin Arzuza");
+    // PARTE mostrado sin ceros iniciales (formatParteDisplay)...
+    expect(body.text).toContain("PARTE:</b> 2119");
+    // ...pero el valor interno (con ceros) es el que arma el enlace.
+    expect(body.text).toContain("/solicitudes/00002119");
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy.mock.calls[0][0]).toBe("[telegram] technician_assigned enviado correctamente para PARTE 00002119.");
+    assertNeverLogged(logSpy, FAKE_TOKEN);
+  });
+
+  it("omite en silencio (solo warning) cuando falta configuración de Telegram", async () => {
+    delete process.env[TOKEN_KEY];
+    process.env[CHAT_ID_KEY] = FAKE_CHAT_ID;
+
+    await sendTechnicianAssignedNotification(makeRequest(), "Benjamin Arzuza");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain("technician_assigned");
+  });
+
+  it("registra status HTTP y error saneado cuando la API de Telegram responde con status no-2xx, sin filtrar el token", async () => {
+    process.env[TOKEN_KEY] = FAKE_TOKEN;
+    process.env[CHAT_ID_KEY] = FAKE_CHAT_ID;
+    fetchMock.mockResolvedValue(
+      makeFetchResponse({ ok: false, status: 403, body: { ok: false, error_code: 403, description: "Forbidden" } }),
+    );
+
+    await sendTechnicianAssignedNotification(makeRequest(), "Benjamin Arzuza");
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0][0]).toContain("403");
+    expect(logSpy).not.toHaveBeenCalled();
+    assertNeverLogged(errorSpy, FAKE_TOKEN);
+    assertNeverLogged(errorSpy, "api.telegram.org/bot");
+  });
+
+  it("nunca lanza: un fallo de Telegram no debe poder afectar a la asignación ya guardada", async () => {
+    process.env[TOKEN_KEY] = FAKE_TOKEN;
+    process.env[CHAT_ID_KEY] = FAKE_CHAT_ID;
+    fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+
+    await expect(sendTechnicianAssignedNotification(makeRequest(), "Benjamin Arzuza")).resolves.toBeUndefined();
+    assertNeverLogged(errorSpy, FAKE_TOKEN);
   });
 });
