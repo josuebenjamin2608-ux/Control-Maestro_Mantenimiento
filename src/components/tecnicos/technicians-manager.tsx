@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -14,7 +15,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { TechnicianFormSheet } from "@/components/tecnicos/technician-form-sheet";
+import { TechnicianTelegramLinkDialog } from "@/components/tecnicos/technician-telegram-link-dialog";
 import { setTechnicianActive } from "@/server/actions/technicians";
+import { unlinkTechnicianTelegram } from "@/server/actions/technician-telegram";
 import type { Technician } from "@/generated/prisma/client";
 
 type FormState = { mode: "create" } | { mode: "edit"; technician: Technician } | null;
@@ -25,7 +28,9 @@ type FormState = { mode: "create" } | { mode: "edit"; technician: Technician } |
  * isActive, conservando datos e historial de asignaciones.
  */
 export function TechniciansManager({ technicians }: { technicians: Technician[] }) {
+  const router = useRouter();
   const [formState, setFormState] = useState<FormState>(null);
+  const [telegramTechnician, setTelegramTechnician] = useState<Technician | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -44,6 +49,26 @@ export function TechniciansManager({ technicians }: { technicians: Technician[] 
       }
       setPendingId(null);
     });
+  }
+
+  function unlinkTelegram(technician: Technician) {
+    if (!window.confirm(`¿Desvincular Telegram de ${technician.fullName}?`)) {
+      return;
+    }
+    setError(null);
+    setPendingId(technician.id);
+    startTransition(async () => {
+      const result = await unlinkTechnicianTelegram(technician.id);
+      if (!result.ok) {
+        setError(result.error);
+      }
+      setPendingId(null);
+    });
+  }
+
+  function handleTelegramLinked() {
+    setTelegramTechnician(null);
+    startTransition(() => router.refresh());
   }
 
   return (
@@ -78,6 +103,29 @@ export function TechniciansManager({ technicians }: { technicians: Technician[] 
                   </Badge>
                 </div>
                 <span className="text-sm text-muted-foreground">{technician.specialty ?? "—"}</span>
+                <div className="flex items-center gap-2 pt-1">
+                  <Badge variant={technician.telegramChatId ? "success" : "outline"}>
+                    {technician.telegramChatId ? "Telegram vinculado" : "Telegram no vinculado"}
+                  </Badge>
+                  {technician.telegramChatId ? (
+                    <button
+                      type="button"
+                      onClick={() => unlinkTelegram(technician)}
+                      disabled={isPending && pendingId === technician.id}
+                      className="text-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
+                    >
+                      Desvincular
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setTelegramTechnician(technician)}
+                      className="text-sm text-primary hover:underline"
+                    >
+                      Vincular Telegram
+                    </button>
+                  )}
+                </div>
                 <div className="flex gap-3 pt-1">
                   <button
                     type="button"
@@ -107,6 +155,7 @@ export function TechniciansManager({ technicians }: { technicians: Technician[] 
                   <TableHead>Nombre</TableHead>
                   <TableHead>Cargo / Especialidad</TableHead>
                   <TableHead>Estado</TableHead>
+                  <TableHead>Telegram</TableHead>
                   <TableHead className="text-right">Acciones</TableHead>
                 </TableRow>
               </TableHeader>
@@ -121,6 +170,31 @@ export function TechniciansManager({ technicians }: { technicians: Technician[] 
                       <Badge variant={technician.isActive ? "success" : "outline"}>
                         {technician.isActive ? "Activo" : "Inactivo"}
                       </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <Badge variant={technician.telegramChatId ? "success" : "outline"}>
+                          {technician.telegramChatId ? "Vinculado" : "No vinculado"}
+                        </Badge>
+                        {technician.telegramChatId ? (
+                          <button
+                            type="button"
+                            onClick={() => unlinkTelegram(technician)}
+                            disabled={isPending && pendingId === technician.id}
+                            className="text-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
+                          >
+                            Desvincular
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setTelegramTechnician(technician)}
+                            className="text-sm text-primary hover:underline"
+                          >
+                            Vincular Telegram
+                          </button>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-3">
@@ -155,6 +229,15 @@ export function TechniciansManager({ technicians }: { technicians: Technician[] 
           if (!open) setFormState(null);
         }}
         technician={formState?.mode === "edit" ? formState.technician : null}
+      />
+
+      <TechnicianTelegramLinkDialog
+        technician={telegramTechnician}
+        open={telegramTechnician !== null}
+        onOpenChange={(open) => {
+          if (!open) setTelegramTechnician(null);
+        }}
+        onLinked={handleTelegramLinked}
       />
     </div>
   );

@@ -45,7 +45,7 @@ model User {
   role         Role        @relation(fields: [roleId], references: [id], onDelete: Restrict)
   technician   Technician?
 
-  createdOrders     MaintenanceOrder[]  @relation("MaintenanceOrderCreatedBy")
+  createdOrders      MaintenanceOrder[]  @relation("MaintenanceOrderCreatedBy")
   inventoryMovements InventoryMovement[] @relation("InventoryMovementPerformedBy")
   importBatches      ImportBatch[]
 
@@ -64,23 +64,61 @@ model User {
 /// a technician) — the link is an optional 1:1 so either record can exist
 /// on its own.
 model Technician {
-  id           String   @id @default(cuid())
-  employeeCode String   @unique
+  id           String  @id @default(cuid())
+  employeeCode String  @unique
   fullName     String
   specialty    String?
   phone        String?
-  isActive     Boolean  @default(true)
+  isActive     Boolean @default(true)
 
   userId String? @unique
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
 
-  assignedOrders   MaintenanceOrder[]
-  assignedRequests MaintenanceRequestTechnician[]
+  /// chat_id privado de Telegram vinculado a este técnico (ver
+  /// TechnicianTelegramLinkCode para el flujo de vinculación por código).
+  /// null mientras no esté vinculado. Único: un mismo chat de Telegram
+  /// nunca puede quedar vinculado a dos técnicos a la vez — lo exige tanto
+  /// esta restricción como consumeTechnicianTelegramLinkCode. Nunca
+  /// almacena tokens ni secretos de Telegram, solo el identificador de
+  /// chat que la propia API de Telegram entrega en cada mensaje.
+  telegramChatId   String?   @unique
+  /// Momento en que se confirmó la vinculación — null mientras no esté
+  /// vinculado; se limpia junto con telegramChatId al desvincular.
+  telegramLinkedAt DateTime?
+
+  assignedOrders    MaintenanceOrder[]
+  assignedRequests  MaintenanceRequestTechnician[]
+  telegramLinkCodes TechnicianTelegramLinkCode[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@map("technicians")
+}
+
+/// Código temporal de un solo uso para vincular el chat privado de Telegram
+/// de un técnico (ver /api/telegram/webhook y
+/// src/server/services/technician-telegram-link.service.ts). Nunca
+/// almacena tokens ni secretos de Telegram — solo un código corto generado
+/// por SIMI, con expiración corta. Conserva el historial completo de
+/// intentos (nunca se borra un código ya usado); al generar uno nuevo se
+/// eliminan los códigos PENDIENTES anteriores del mismo técnico (ver
+/// generateTechnicianTelegramLinkCode), así que como mucho hay una fila
+/// pendiente (usedAt = null) por técnico en un momento dado.
+model TechnicianTelegramLinkCode {
+  id String @id @default(cuid())
+
+  technicianId String
+  technician   Technician @relation(fields: [technicianId], references: [id], onDelete: Cascade)
+
+  code      String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([technicianId])
+  @@map("technician_telegram_link_codes")
 }
 
 // ---------------------------------------------------------------------------
@@ -191,13 +229,13 @@ enum MaintenanceOrderStatus {
 
 /// The operational work order — the core unit of work in the system.
 model MaintenanceOrder {
-  id          String                  @id @default(cuid())
-  code        String                  @unique
+  id          String                 @id @default(cuid())
+  code        String                 @unique
   title       String
   description String?
   type        MaintenanceType
-  priority    MaintenancePriority     @default(MEDIUM)
-  status      MaintenanceOrderStatus  @default(OPEN)
+  priority    MaintenancePriority    @default(MEDIUM)
+  status      MaintenanceOrderStatus @default(OPEN)
 
   machineId String
   machine   Machine @relation(fields: [machineId], references: [id], onDelete: Restrict)
@@ -258,9 +296,9 @@ model SparePart {
 /// Append-only inventory ledger entry. Each row is one stock movement;
 /// `SparePart.currentStock` is the running total derived from these.
 model InventoryMovement {
-  id       String                 @id @default(cuid())
+  id       String                @id @default(cuid())
   type     InventoryMovementType
-  quantity Decimal                @db.Decimal(12, 3)
+  quantity Decimal               @db.Decimal(12, 3)
   reason   String?
 
   sparePartId String
@@ -288,12 +326,12 @@ model InventoryMovement {
 /// model, and so history survives independently of how orders are managed
 /// later. One order produces at most one history entry.
 model MaintenanceHistory {
-  id      String          @id @default(cuid())
-  type    MaintenanceType
-  summary String
-  performedAt      DateTime
-  downtimeMinutes  Int?
-  cost             Decimal? @db.Decimal(12, 2)
+  id              String          @id @default(cuid())
+  type            MaintenanceType
+  summary         String
+  performedAt     DateTime
+  downtimeMinutes Int?
+  cost            Decimal?        @db.Decimal(12, 2)
 
   machineId String
   machine   Machine @relation(fields: [machineId], references: [id], onDelete: Restrict)
@@ -425,25 +463,25 @@ model MaintenanceLog {
   id       String @id @default(cuid())
   registro String @unique
 
-  fechaini  DateTime?
-  orden     String?
-  maquina   String?
-  oper      String?
-  nombreord String?
-  ccosto    String?
-  operacion String?
+  fechaini      DateTime?
+  orden         String?
+  maquina       String?
+  oper          String?
+  nombreord     String?
+  ccosto        String?
+  operacion     String?
   /// Texto crudo: el formato numérico/unidad no está garantizado por la fuente.
-  cantidad  String?
-  codemp    String?
-  empleado  String?
-  fechafin  DateTime?
+  cantidad      String?
+  codemp        String?
+  empleado      String?
+  fechafin      DateTime?
   /// Texto crudo: los formatos de hora exportados por Excel son
   /// inconsistentes; se preserva tal cual para no inventar una hora mal
   /// interpretada. Se puede tipar con precisión cuando se valide con un
   /// archivo real.
-  horaini   String?
-  horafin   String?
-  minutos   Int?
+  horaini       String?
+  horafin       String?
+  minutos       Int?
   observaciones String?
 
   /// OBSERVACIONES ya recortado (trim), usado para la conciliación por
@@ -566,8 +604,8 @@ model ImportLogResult {
   importBatchId String
   importBatch   ImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
 
-  registro String
-  outcome  LogRowOutcome
+  registro        String
+  outcome         LogRowOutcome
   /// Snapshot del estado de relación en el momento de esta importación (la
   /// relación "en vivo" vive en MaintenanceLog.relationStatus y puede
   /// cambiar después; esto queda fijo para saber qué pasó en esta carga).
@@ -575,7 +613,7 @@ model ImportLogResult {
   errorMessage    String?
 
   maintenanceLogId String?
-  maintenanceLog    MaintenanceLog? @relation(fields: [maintenanceLogId], references: [id], onDelete: SetNull)
+  maintenanceLog   MaintenanceLog? @relation(fields: [maintenanceLogId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
 

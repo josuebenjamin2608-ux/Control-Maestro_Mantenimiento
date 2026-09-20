@@ -73,6 +73,26 @@ function validateTelegramConfig(): ConfigValidationResult {
   return { ok: true, token, chatId };
 }
 
+type TokenValidationResult = { ok: true; token: string } | { ok: false; reason: string };
+
+/**
+ * Igual que validateTelegramConfig, pero solo exige el token del bot —
+ * usada por los envíos a un chat_id individual (vinculación de técnico,
+ * respuestas del webhook), donde el chat_id nunca sale de una variable de
+ * entorno sino de `Technician.telegramChatId` (ya validado al vincularse)
+ * o del propio update entrante de Telegram.
+ */
+function validateBotTokenOnly(): TokenValidationResult {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) {
+    return { ok: false, reason: "TELEGRAM_BOT_TOKEN no está configurada" };
+  }
+  if (!BOT_TOKEN_PATTERN.test(token)) {
+    return { ok: false, reason: "TELEGRAM_BOT_TOKEN tiene un formato inválido" };
+  }
+  return { ok: true, token };
+}
+
 /**
  * Clasifica un error de fetch en una categoría fija y segura para loggear —
  * NUNCA el mensaje crudo del error, que en Node puede incluir la URL de
@@ -171,10 +191,63 @@ function buildTechnicianAssignedText(request: MaintenanceRequest, technicianName
 }
 
 /**
- * Infraestructura de envío compartida por todos los eventos de Telegram.
- * Nunca lanza: un fallo (variables sin configurar, chat_id inválido,
- * timeout, red caída, respuesta no-2xx o body.ok=false de la API de
- * Telegram) no debe afectar al llamador, que ya persistió su cambio en
+ * Igual que buildTechnicianAssignedText, pero para el chat privado
+ * individual del técnico (vinculación Telegram por técnico) en vez del
+ * grupo — mismo criterio de `parte` crudo para el enlace, formatParteDisplay()
+ * solo para el texto visible.
+ */
+function buildTechnicianAssignedDirectText(request: MaintenanceRequest, technicianName: string): string {
+  const parteDisplay = formatParteDisplay(request.parte);
+  const lines = [
+    "🔧 <b>NUEVA TAREA DE MANTENIMIENTO</b>",
+    "",
+    `<b>PARTE:</b> ${escapeHtml(parteDisplay)}`,
+    `<b>Máquina:</b> ${displayOrDash(request.maquina)}`,
+    `<b>Problema:</b> ${displayOrDash(request.problema)}`,
+    `<b>Tarea:</b> ${displayOrDash(request.tarea)}`,
+    `<b>Estado:</b> ${displayOrDash(request.estado)}`,
+    `<b>Técnico asignado:</b> ${escapeHtml(technicianName)}`,
+  ];
+
+  const link = buildSolicitudLink(request.parte);
+  if (link) {
+    lines.push("", `🔗 <a href="${escapeHtml(link)}">Ver solicitud en SIMI</a>`);
+  }
+
+  return lines.join("\n");
+}
+
+/** Respuesta del webhook cuando el código de vinculación se procesó con éxito. */
+function buildTelegramLinkSuccessText(technicianName: string): string {
+  return [
+    "✅ Telegram vinculado correctamente con SIMI.",
+    "",
+    `Técnico: ${escapeHtml(technicianName)}`,
+    "",
+    "A partir de ahora SIMI podrá enviarte notificaciones individuales de tus tareas de mantenimiento.",
+  ].join("\n");
+}
+
+/** Respuesta del webhook cuando el texto recibido no coincide con ningún código pendiente y vigente. */
+function buildTelegramLinkInvalidCodeText(): string {
+  return "❌ Código de vinculación inválido o expirado.";
+}
+
+/** Respuesta del webhook cuando el chat_id ya está vinculado a otro técnico. */
+function buildTelegramLinkChatAlreadyLinkedText(): string {
+  return "❌ Este Telegram ya está vinculado a otro técnico.";
+}
+
+function parteLogSuffix(parte: string | null): string {
+  return parte ? ` para PARTE ${parte}` : "";
+}
+
+/**
+ * Infraestructura de envío compartida por todos los eventos de Telegram —
+ * tanto al grupo de Mantenimiento como al chat privado de un técnico
+ * vinculado o al remitente de un update entrante (webhook). Nunca lanza:
+ * un fallo (timeout, red caída, respuesta no-2xx o body.ok=false de la API
+ * de Telegram) no debe afectar al llamador, que ya persistió su cambio en
  * PostgreSQL antes de invocar esta función.
  *
  * Registra el resultado en los tres casos (éxito, fallo HTTP/API, fallo de
@@ -184,18 +257,22 @@ function buildTechnicianAssignedText(request: MaintenanceRequest, technicianName
  * el mensaje crudo de fetch, nunca el body completo de la respuesta de
  * Telegram (solo error_code/description ya truncados cuando aplica).
  *
- * `eventName` es solo para los mensajes de log (p. ej. "maintenance_request.created",
- * "technician_assigned") — nunca decide el contenido del mensaje enviado a
- * Telegram, que ya llega armado en `text`.
+ * `token`/`chatId` ya deben venir validados por el llamador (validateTelegramConfig
+ * o validateBotTokenOnly) — esta función nunca lee variables de entorno.
+ * `eventName` es solo para los mensajes de log — nunca decide el contenido
+ * del mensaje enviado a Telegram, que ya llega armado en `text`. `parte` es
+ * `null` únicamente cuando el envío no está asociado a una Solicitud (p. ej.
+ * la respuesta del webhook de vinculación) — en ese caso se omite el sufijo
+ * "para PARTE X" del log.
  */
-async function dispatchTelegramMessage(text: string, eventName: string, parte: string): Promise<void> {
-  const config = validateTelegramConfig();
-  if (!config.ok) {
-    console.warn(`[telegram] ${config.reason}; se omite la notificación de ${eventName} para PARTE ${parte}.`);
-    return;
-  }
-
-  const apiUrl = `https://api.telegram.org/bot${config.token}/sendMessage`;
+async function dispatchTelegramMessage(
+  token: string,
+  chatId: string,
+  text: string,
+  eventName: string,
+  parte: string | null,
+): Promise<void> {
+  const apiUrl = `https://api.telegram.org/bot${token}/sendMessage`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), TELEGRAM_API_TIMEOUT_MS);
 
@@ -204,7 +281,7 @@ async function dispatchTelegramMessage(text: string, eventName: string, parte: s
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        chat_id: config.chatId,
+        chat_id: chatId,
         text,
         parse_mode: "HTML",
         disable_web_page_preview: true,
@@ -220,22 +297,22 @@ async function dispatchTelegramMessage(text: string, eventName: string, parte: s
 
     if (!response.ok) {
       console.error(
-        `[telegram] La API de Telegram respondió HTTP ${response.status} para PARTE ${parte}` +
+        `[telegram] La API de Telegram respondió HTTP ${response.status}${parteLogSuffix(parte)}` +
           (body?.error_code !== undefined ? ` (error_code ${body.error_code})` : "") +
           `: ${sanitizeTelegramDescription(body?.description)}`,
       );
     } else if (!body?.ok) {
       console.error(
-        `[telegram] La API de Telegram respondió HTTP ${response.status} pero body.ok=false para PARTE ${parte}` +
+        `[telegram] La API de Telegram respondió HTTP ${response.status} pero body.ok=false${parteLogSuffix(parte)}` +
           (body?.error_code !== undefined ? ` (error_code ${body.error_code})` : "") +
           `: ${sanitizeTelegramDescription(body?.description)}`,
       );
     } else {
-      console.log(`[telegram] ${eventName} enviado correctamente para PARTE ${parte}.`);
+      console.log(`[telegram] ${eventName} enviado correctamente${parteLogSuffix(parte)}.`);
     }
   } catch (error) {
     console.error(
-      `[telegram] No se pudo enviar la notificación de ${eventName} para PARTE ${parte}: ${classifyFetchError(error)}.`,
+      `[telegram] No se pudo enviar la notificación de ${eventName}${parteLogSuffix(parte)}: ${classifyFetchError(error)}.`,
     );
   } finally {
     clearTimeout(timeoutId);
@@ -252,7 +329,16 @@ async function dispatchTelegramMessage(text: string, eventName: string, parte: s
 export async function sendMaintenanceRequestCreatedNotification(
   request: MaintenanceRequest,
 ): Promise<void> {
+  const config = validateTelegramConfig();
+  if (!config.ok) {
+    console.warn(
+      `[telegram] ${config.reason}; se omite la notificación de maintenance_request.created para PARTE ${request.parte}.`,
+    );
+    return;
+  }
   await dispatchTelegramMessage(
+    config.token,
+    config.chatId,
     buildMaintenanceRequestCreatedText(request),
     "maintenance_request.created",
     request.parte,
@@ -272,9 +358,72 @@ export async function sendTechnicianAssignedNotification(
   request: MaintenanceRequest,
   technicianName: string,
 ): Promise<void> {
+  const config = validateTelegramConfig();
+  if (!config.ok) {
+    console.warn(
+      `[telegram] ${config.reason}; se omite la notificación de technician_assigned para PARTE ${request.parte}.`,
+    );
+    return;
+  }
   await dispatchTelegramMessage(
+    config.token,
+    config.chatId,
     buildTechnicianAssignedText(request, technicianName),
     "technician_assigned",
     request.parte,
   );
 }
+
+/**
+ * Notifica `technician_assigned_direct` al chat privado del técnico
+ * (Telegram individual vinculado) — NUNCA al grupo de Mantenimiento, y
+ * completamente independiente de sendTechnicianAssignedNotification de
+ * arriba (que sigue notificando al grupo sin cambios). QUIÉN y CUÁNDO
+ * dispararla es responsabilidad exclusiva del llamador; `telegramChatId`
+ * debe venir ya resuelto desde `Technician.telegramChatId` — esta función
+ * nunca consulta la base de datos ni decide si el técnico está vinculado.
+ */
+export async function sendTechnicianAssignedDirectNotification(
+  request: MaintenanceRequest,
+  technicianName: string,
+  telegramChatId: string,
+): Promise<void> {
+  const config = validateBotTokenOnly();
+  if (!config.ok) {
+    console.warn(
+      `[telegram] ${config.reason}; se omite la notificación directa de technician_assigned_direct para PARTE ${request.parte}.`,
+    );
+    return;
+  }
+  await dispatchTelegramMessage(
+    config.token,
+    telegramChatId,
+    buildTechnicianAssignedDirectText(request, technicianName),
+    "technician_assigned_direct",
+    request.parte,
+  );
+}
+
+/**
+ * Envía una respuesta de texto simple al chat privado que escribió al bot
+ * — usada exclusivamente por el webhook de vinculación
+ * (/api/telegram/webhook) para confirmar o rechazar un código recibido.
+ * Nunca lanza, mismo contrato que el resto de las funciones de envío de
+ * este archivo. `buildTelegramLinkSuccessText`/`buildTelegramLinkInvalidCodeText`/
+ * `buildTelegramLinkChatAlreadyLinkedText` quedan exportadas para que el
+ * route handler arme el texto exacto sin duplicar el escapado HTML acá.
+ */
+export async function sendTelegramWebhookReply(chatId: string, text: string): Promise<void> {
+  const config = validateBotTokenOnly();
+  if (!config.ok) {
+    console.warn(`[telegram] ${config.reason}; no se pudo enviar la respuesta del webhook de vinculación.`);
+    return;
+  }
+  await dispatchTelegramMessage(config.token, chatId, text, "telegram_link_webhook_reply", null);
+}
+
+export {
+  buildTelegramLinkSuccessText,
+  buildTelegramLinkInvalidCodeText,
+  buildTelegramLinkChatAlreadyLinkedText,
+};

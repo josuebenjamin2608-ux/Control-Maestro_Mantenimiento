@@ -2,8 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MaintenanceRequest } from "@/generated/prisma/client";
 import {
+  buildTelegramLinkChatAlreadyLinkedText,
+  buildTelegramLinkInvalidCodeText,
+  buildTelegramLinkSuccessText,
   sendMaintenanceRequestCreatedNotification,
+  sendTechnicianAssignedDirectNotification,
   sendTechnicianAssignedNotification,
+  sendTelegramWebhookReply,
 } from "./telegram.service";
 
 const TOKEN_KEY = "TELEGRAM_BOT_TOKEN";
@@ -325,5 +330,162 @@ describe("sendTechnicianAssignedNotification", () => {
 
     await expect(sendTechnicianAssignedNotification(makeRequest(), "Benjamin Arzuza")).resolves.toBeUndefined();
     assertNeverLogged(errorSpy, FAKE_TOKEN);
+  });
+});
+
+describe("sendTechnicianAssignedDirectNotification — [11] notificación individual al chat privado del técnico", () => {
+  const originalToken = process.env[TOKEN_KEY];
+  const originalVercelUrl = process.env.VERCEL_URL;
+  const FAKE_TECHNICIAN_CHAT_ID = "987654321";
+  let fetchMock: ReturnType<typeof vi.fn>;
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    process.env.VERCEL_URL = "simi.example.vercel.app";
+  });
+
+  afterEach(() => {
+    if (originalToken === undefined) delete process.env[TOKEN_KEY];
+    else process.env[TOKEN_KEY] = originalToken;
+    if (originalVercelUrl === undefined) delete process.env.VERCEL_URL;
+    else process.env.VERCEL_URL = originalVercelUrl;
+    vi.unstubAllGlobals();
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it("envía al chat_id individual del técnico (NUNCA al grupo) con el formato NUEVA TAREA DE MANTENIMIENTO", async () => {
+    process.env[TOKEN_KEY] = FAKE_TOKEN;
+    fetchMock.mockResolvedValue(
+      makeFetchResponse({ ok: true, status: 200, body: { ok: true, result: { message_id: 99 } } }),
+    );
+
+    await sendTechnicianAssignedDirectNotification(makeRequest(), "Benjamin Arzuza", FAKE_TECHNICIAN_CHAT_ID);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [calledUrl, init] = fetchMock.mock.calls[0];
+    expect(calledUrl).toBe(`https://api.telegram.org/bot${FAKE_TOKEN}/sendMessage`);
+    const body = JSON.parse(init.body);
+    // Va al chat privado del técnico, no al chat_id del grupo (TELEGRAM_MAINTENANCE_CHAT_ID
+    // ni siquiera está configurada en esta prueba — la función nunca la usa).
+    expect(body.chat_id).toBe(FAKE_TECHNICIAN_CHAT_ID);
+    expect(body.text).toContain("NUEVA TAREA DE MANTENIMIENTO");
+    expect(body.text).toContain("Técnico asignado:</b> Benjamin Arzuza");
+    expect(body.text).toContain("PARTE:</b> 2119");
+    expect(body.text).toContain("/solicitudes/00002119");
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    assertNeverLogged(logSpy, FAKE_TOKEN);
+  });
+
+  it("omite en silencio (solo warning) si TELEGRAM_BOT_TOKEN no está configurado — nunca requiere TELEGRAM_MAINTENANCE_CHAT_ID", async () => {
+    delete process.env[TOKEN_KEY];
+
+    await sendTechnicianAssignedDirectNotification(makeRequest(), "Benjamin Arzuza", FAKE_TECHNICIAN_CHAT_ID);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("[12] nunca lanza si Telegram falla — un fallo acá jamás puede revertir una asignación ya guardada", async () => {
+    process.env[TOKEN_KEY] = FAKE_TOKEN;
+    fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+
+    await expect(
+      sendTechnicianAssignedDirectNotification(makeRequest(), "Benjamin Arzuza", FAKE_TECHNICIAN_CHAT_ID),
+    ).resolves.toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("[13] nunca registra el token en ningún log, ni siquiera cuando fetch rechaza con un error que incluye la URL completa", async () => {
+    process.env[TOKEN_KEY] = FAKE_TOKEN;
+    const apiUrl = `https://api.telegram.org/bot${FAKE_TOKEN}/sendMessage`;
+    fetchMock.mockRejectedValue(new TypeError(`Failed to parse URL from ${apiUrl}`));
+
+    await sendTechnicianAssignedDirectNotification(makeRequest(), "Benjamin Arzuza", FAKE_TECHNICIAN_CHAT_ID);
+
+    assertNeverLogged(errorSpy, FAKE_TOKEN);
+    assertNeverLogged(errorSpy, "api.telegram.org/bot");
+    assertNeverLogged(logSpy, FAKE_TOKEN);
+    assertNeverLogged(warnSpy, FAKE_TOKEN);
+  });
+});
+
+describe("sendTelegramWebhookReply + builders de texto — respuestas del webhook de vinculación", () => {
+  const originalToken = process.env[TOKEN_KEY];
+  const FAKE_CHAT_ID_WEBHOOK = "111222333";
+  let fetchMock: ReturnType<typeof vi.fn>;
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    if (originalToken === undefined) delete process.env[TOKEN_KEY];
+    else process.env[TOKEN_KEY] = originalToken;
+    vi.unstubAllGlobals();
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it("buildTelegramLinkSuccessText incluye el nombre del técnico y el texto exacto pedido", () => {
+    const text = buildTelegramLinkSuccessText("Benjamin Arzuza");
+    expect(text).toBe(
+      "✅ Telegram vinculado correctamente con SIMI.\n\nTécnico: Benjamin Arzuza\n\nA partir de ahora SIMI podrá enviarte notificaciones individuales de tus tareas de mantenimiento.",
+    );
+  });
+
+  it("buildTelegramLinkInvalidCodeText y buildTelegramLinkChatAlreadyLinkedText devuelven el texto exacto pedido", () => {
+    expect(buildTelegramLinkInvalidCodeText()).toBe("❌ Código de vinculación inválido o expirado.");
+    expect(buildTelegramLinkChatAlreadyLinkedText()).toBe("❌ Este Telegram ya está vinculado a otro técnico.");
+  });
+
+  it("sendTelegramWebhookReply envía el texto tal cual al chat_id recibido, sin exigir TELEGRAM_MAINTENANCE_CHAT_ID", async () => {
+    process.env[TOKEN_KEY] = FAKE_TOKEN;
+    fetchMock.mockResolvedValue(makeFetchResponse({ ok: true, status: 200, body: { ok: true } }));
+
+    await sendTelegramWebhookReply(FAKE_CHAT_ID_WEBHOOK, buildTelegramLinkSuccessText("Benjamin Arzuza"));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body);
+    expect(body.chat_id).toBe(FAKE_CHAT_ID_WEBHOOK);
+    expect(body.text).toContain("Benjamin Arzuza");
+  });
+
+  it("[12] nunca lanza si Telegram falla al responder al webhook", async () => {
+    process.env[TOKEN_KEY] = FAKE_TOKEN;
+    fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+
+    await expect(
+      sendTelegramWebhookReply(FAKE_CHAT_ID_WEBHOOK, buildTelegramLinkInvalidCodeText()),
+    ).resolves.toBeUndefined();
+  });
+
+  it("[13] nunca registra el token, ni siquiera con el token ausente", async () => {
+    delete process.env[TOKEN_KEY];
+
+    await sendTelegramWebhookReply(FAKE_CHAT_ID_WEBHOOK, buildTelegramLinkInvalidCodeText());
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    assertNeverLogged(warnSpy, FAKE_TOKEN);
   });
 });
