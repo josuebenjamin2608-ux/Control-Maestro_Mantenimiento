@@ -1,6 +1,13 @@
 -- AlterTable
-ALTER TABLE "technicians" ADD COLUMN     "telegramChatId" TEXT,
-ADD COLUMN     "telegramLinkedAt" TIMESTAMP(3);
+-- IF NOT EXISTS: telegramChatId/telegramLinkedAt ya se agregaron a mano en
+-- Neon durante el diagnóstico de P2022 en /tecnicos (ver commit da5a210 y
+-- la sesión de troubleshooting asociada) — esta migración nunca llegó a
+-- registrarse como aplicada en _prisma_migrations, así que su ALTER TABLE
+-- original (sin IF NOT EXISTS) fallaría con "column already exists" al
+-- reintentarla. El resto de la migración (technician_telegram_link_codes
+-- y sus índices/FK) nunca se creó — sigue igual, sin cambios.
+ALTER TABLE "technicians" ADD COLUMN IF NOT EXISTS "telegramChatId" TEXT,
+ADD COLUMN IF NOT EXISTS "telegramLinkedAt" TIMESTAMP(3);
 
 -- CreateTable
 CREATE TABLE "technician_telegram_link_codes" (
