@@ -190,33 +190,6 @@ function buildTechnicianAssignedText(request: MaintenanceRequest, technicianName
   return lines.join("\n");
 }
 
-/**
- * Igual que buildTechnicianAssignedText, pero para el chat privado
- * individual del técnico (vinculación Telegram por técnico) en vez del
- * grupo — mismo criterio de `parte` crudo para el enlace, formatParteDisplay()
- * solo para el texto visible.
- */
-function buildTechnicianAssignedDirectText(request: MaintenanceRequest, technicianName: string): string {
-  const parteDisplay = formatParteDisplay(request.parte);
-  const lines = [
-    "🔧 <b>NUEVA TAREA DE MANTENIMIENTO</b>",
-    "",
-    `<b>PARTE:</b> ${escapeHtml(parteDisplay)}`,
-    `<b>Máquina:</b> ${displayOrDash(request.maquina)}`,
-    `<b>Problema:</b> ${displayOrDash(request.problema)}`,
-    `<b>Tarea:</b> ${displayOrDash(request.tarea)}`,
-    `<b>Estado:</b> ${displayOrDash(request.estado)}`,
-    `<b>Técnico asignado:</b> ${escapeHtml(technicianName)}`,
-  ];
-
-  const link = buildSolicitudLink(request.parte);
-  if (link) {
-    lines.push("", `🔗 <a href="${escapeHtml(link)}">Ver solicitud en SIMI</a>`);
-  }
-
-  return lines.join("\n");
-}
-
 /** Respuesta del webhook cuando el código de vinculación se procesó con éxito. */
 function buildTelegramLinkSuccessText(technicianName: string): string {
   return [
@@ -378,7 +351,9 @@ export async function sendTechnicianAssignedNotification(
  * Notifica `technician_assigned_direct` al chat privado del técnico
  * (Telegram individual vinculado) — NUNCA al grupo de Mantenimiento, y
  * completamente independiente de sendTechnicianAssignedNotification de
- * arriba (que sigue notificando al grupo sin cambios). QUIÉN y CUÁNDO
+ * arriba (que sigue notificando al grupo sin cambios). Mismo contenido
+ * exacto que el mensaje de grupo (buildTechnicianAssignedText) — mismo
+ * técnico, misma solicitud, solo cambia el destino. QUIÉN y CUÁNDO
  * dispararla es responsabilidad exclusiva del llamador; `telegramChatId`
  * debe venir ya resuelto desde `Technician.telegramChatId` — esta función
  * nunca consulta la base de datos ni decide si el técnico está vinculado.
@@ -398,7 +373,7 @@ export async function sendTechnicianAssignedDirectNotification(
   await dispatchTelegramMessage(
     config.token,
     telegramChatId,
-    buildTechnicianAssignedDirectText(request, technicianName),
+    buildTechnicianAssignedText(request, technicianName),
     "technician_assigned_direct",
     request.parte,
   );

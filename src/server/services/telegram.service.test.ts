@@ -362,7 +362,7 @@ describe("sendTechnicianAssignedDirectNotification — [11] notificación indivi
     warnSpy.mockRestore();
   });
 
-  it("envía al chat_id individual del técnico (NUNCA al grupo) con el formato NUEVA TAREA DE MANTENIMIENTO", async () => {
+  it("envía al chat_id individual del técnico (NUNCA al grupo) con el mismo contenido que el mensaje de grupo (ASIGNACIÓN DE MANTENIMIENTO)", async () => {
     process.env[TOKEN_KEY] = FAKE_TOKEN;
     fetchMock.mockResolvedValue(
       makeFetchResponse({ ok: true, status: 200, body: { ok: true, result: { message_id: 99 } } }),
@@ -377,9 +377,12 @@ describe("sendTechnicianAssignedDirectNotification — [11] notificación indivi
     // Va al chat privado del técnico, no al chat_id del grupo (TELEGRAM_MAINTENANCE_CHAT_ID
     // ni siquiera está configurada en esta prueba — la función nunca la usa).
     expect(body.chat_id).toBe(FAKE_TECHNICIAN_CHAT_ID);
-    expect(body.text).toContain("NUEVA TAREA DE MANTENIMIENTO");
+    expect(body.text).toContain("ASIGNACIÓN DE MANTENIMIENTO");
     expect(body.text).toContain("Técnico asignado:</b> Benjamin Arzuza");
     expect(body.text).toContain("PARTE:</b> 2119");
+    expect(body.text).toContain("Máquina:</b> COLAMINADORA");
+    expect(body.text).toContain("Estado:</b> Solicitado");
+    expect(body.text).toContain("Ver solicitud en SIMI");
     expect(body.text).toContain("/solicitudes/00002119");
 
     expect(logSpy).toHaveBeenCalledTimes(1);

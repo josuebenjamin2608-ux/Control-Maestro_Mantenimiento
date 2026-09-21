@@ -5,7 +5,10 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { technicianInputSchema, type TechnicianInput } from "@/lib/validations/technicians";
 import { Prisma } from "@/generated/prisma/client";
-import { sendTechnicianAssignedNotification } from "@/server/services/telegram.service";
+import {
+  sendTechnicianAssignedDirectNotification,
+  sendTechnicianAssignedNotification,
+} from "@/server/services/telegram.service";
 
 export type ActionResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
@@ -32,17 +35,21 @@ function isUniqueConstraintError(error: unknown): boolean {
  * así el historial conserva cada ciclo de asignación/retiro por separado.
  * Nunca crea técnicos nuevos.
  *
- * Notifica a Telegram (evento `technician_assigned`) exclusivamente cuando
- * esta llamada realmente crea la fila nueva en MaintenanceRequestTechnician
- * — nunca cuando el técnico ya estaba activamente asignado (evita
- * duplicar la notificación por un reintento o un doble clic sobre un
- * técnico ya asignado). Regla estricta: BD create exitoso -> Telegram,
- * nunca al revés; sendTechnicianAssignedNotification ya está diseñada para
- * nunca lanzar, pero igual se envuelve en Promise.allSettled (mismo
- * patrón defensivo que applyMaintenanceRequestImport en
- * maintenance-request-import.service.ts) para que, aunque ese contrato se
- * violara alguna vez, jamás pueda propagar una excepción que revierta la
- * asignación ya guardada ni que este Server Action responda como fallido.
+ * Notifica a Telegram (evento `technician_assigned`, al grupo, y
+ * `technician_assigned_direct`, al chat privado del técnico si tiene
+ * Telegram vinculado) exclusivamente cuando esta llamada realmente crea la
+ * fila nueva en MaintenanceRequestTechnician — nunca cuando el técnico ya
+ * estaba activamente asignado (evita duplicar ambas notificaciones por un
+ * reintento o un doble clic sobre un técnico ya asignado). La notificación
+ * individual se omite en silencio (con un warning) si el técnico no tiene
+ * `telegramChatId` — nunca falla la asignación por eso. Regla estricta: BD
+ * create exitoso -> Telegram, nunca al revés; ambas funciones de envío ya
+ * están diseñadas para nunca lanzar, pero igual se envuelven en
+ * Promise.allSettled (mismo patrón defensivo que
+ * applyMaintenanceRequestImport en maintenance-request-import.service.ts)
+ * para que, aunque ese contrato se violara alguna vez, jamás puedan
+ * propagar una excepción que revierta la asignación ya guardada ni que
+ * este Server Action responda como fallido.
  */
 export async function assignTechnicianToRequest(
   maintenanceRequestId: string,
@@ -52,7 +59,7 @@ export async function assignTechnicianToRequest(
     db.maintenanceRequest.findUnique({ where: { id: maintenanceRequestId } }),
     db.technician.findUnique({
       where: { id: technicianId },
-      select: { id: true, isActive: true, fullName: true },
+      select: { id: true, isActive: true, fullName: true, telegramChatId: true },
     }),
   ]);
 
@@ -77,7 +84,17 @@ export async function assignTechnicianToRequest(
     });
 
     // Solo se llega acá si el create de arriba ya confirmó en PostgreSQL.
-    await Promise.allSettled([sendTechnicianAssignedNotification(request, technician.fullName)]);
+    const notifications = [sendTechnicianAssignedNotification(request, technician.fullName)];
+    if (technician.telegramChatId) {
+      notifications.push(
+        sendTechnicianAssignedDirectNotification(request, technician.fullName, technician.telegramChatId),
+      );
+    } else {
+      console.warn(
+        `[telegram] El técnico ${technician.fullName} (${technician.id}) no tiene Telegram vinculado; se omite la notificación individual para PARTE ${request.parte}.`,
+      );
+    }
+    await Promise.allSettled(notifications);
   }
 
   revalidatePath(`/solicitudes/${encodeURIComponent(request.parte)}`);
