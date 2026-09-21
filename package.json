@@ -14,7 +14,8 @@
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "db:resolve-old-migrations": "npx prisma migrate resolve --applied \"20260914145814_add_maintenance_request_technicians\" && npx prisma migrate resolve --applied \"20260914171154_add_technician_assignment_removed_at\" && npx prisma migrate resolve --applied \"20260915205722_add_maintenance_request_responsible_area\" && npx prisma migrate resolve --applied \"20260916160451_add_maintenance_request_commitment_date\""
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",
