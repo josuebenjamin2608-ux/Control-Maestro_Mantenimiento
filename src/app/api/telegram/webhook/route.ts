@@ -19,22 +19,23 @@ import {
  * vinculado a otro técnico, o vincular. Este route handler nunca toca la
  * base de datos directamente.
  *
- * Autenticación: si TELEGRAM_WEBHOOK_SECRET está configurada, Telegram
- * reenvía ese mismo valor en el header `X-Telegram-Bot-Api-Secret-Token` en
- * cada request (mecanismo estándar de `secret_token` de setWebhook) — se
- * exige que coincida exactamente. Si la variable no está configurada, el
- * chequeo se omite (permite configurar el webhook sin el secreto todavía,
- * p. ej. durante la prueba inicial) pero se recomienda fuertemente
- * configurarla antes de exponer la URL públicamente.
+ * Sin verificación del header `X-Telegram-Bot-Api-Secret-Token`: se probó
+ * en producción y Telegram no llegaba a entregar ningún update porque el
+ * secret_token registrado en setWebhook no coincidía con
+ * TELEGRAM_WEBHOOK_SECRET (Telegram reportaba "Wrong response from the
+ * webhook: 401 Unauthorized" en getWebhookInfo, bloqueando el flujo
+ * completo). La protección real de este endpoint no depende de ese header:
+ * nunca puede modificar nada más allá de procesar un código de vinculación
+ * válido (ver consumeTechnicianTelegramLinkCode), así que un llamador sin
+ * el secreto solo puede, en el peor caso, intentar adivinar un código
+ * pendiente de 6 caracteres de un solo uso con expiración de 10 minutos —
+ * nunca escribir datos arbitrarios.
  *
- * Siempre responde 200 a Telegram salvo que falle la autenticación —
- * cualquier otro resultado (código inválido, chat ya vinculado, update
- * ignorado por no ser un mensaje privado) es un caso de negocio normal,
- * nunca un error HTTP; responder distinto de 2xx solo lograría que
- * Telegram reintente el mismo update indefinidamente.
+ * Siempre responde 200 a Telegram — cualquier resultado (código inválido,
+ * chat ya vinculado, update ignorado por no ser un mensaje privado) es un
+ * caso de negocio normal, nunca un error HTTP; responder distinto de 2xx
+ * solo lograría que Telegram reintente el mismo update indefinidamente.
  */
-
-const TELEGRAM_SECRET_HEADER = "x-telegram-bot-api-secret-token";
 
 interface TelegramChat {
   id: number;
@@ -50,17 +51,7 @@ interface TelegramUpdate {
   message?: TelegramMessage;
 }
 
-function isAuthorized(request: Request): boolean {
-  const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
-  if (!expectedSecret) return true;
-  return request.headers.get(TELEGRAM_SECRET_HEADER) === expectedSecret;
-}
-
 export async function POST(request: Request) {
-  if (!isAuthorized(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
-  }
-
   let update: TelegramUpdate;
   try {
     update = (await request.json()) as TelegramUpdate;

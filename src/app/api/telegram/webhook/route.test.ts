@@ -7,8 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * usan reales — son funciones puras sin I/O. Cubre el contrato de
  * seguridad central del endpoint: solo puede llamar a
  * consumeTechnicianTelegramLinkCode con exactamente (texto, chat_id) del
- * update entrante, nunca modifica nada más, y siempre responde 200 salvo
- * que falle la autenticación del secreto.
+ * update entrante, nunca modifica nada más, y siempre responde 200. No hay
+ * chequeo del header X-Telegram-Bot-Api-Secret-Token (se quitó porque
+ * bloqueaba en producción todos los updates reales de Telegram — ver
+ * comentario en route.ts) — estas pruebas confirman que el endpoint
+ * procesa normalmente sin importar la presencia/valor de ese header ni de
+ * TELEGRAM_WEBHOOK_SECRET.
  */
 
 const { consumeMock, sendReplyMock } = vi.hoisted(() => ({
@@ -54,36 +58,23 @@ describe("POST /api/telegram/webhook", () => {
     else process.env[SECRET_KEY] = originalSecret;
   });
 
-  it("rechaza con 401 si TELEGRAM_WEBHOOK_SECRET está configurada y el header no coincide", async () => {
+  it("procesa el update normalmente aunque falte el header X-Telegram-Bot-Api-Secret-Token, incluso con TELEGRAM_WEBHOOK_SECRET configurada", async () => {
     process.env[SECRET_KEY] = "shh-secreto";
-    const request = makeRequest(
-      { message: { chat: { id: 1, type: "private" }, text: "SIMI-ABC123" } },
-      { "x-telegram-bot-api-secret-token": "otro-valor" },
-    );
-
-    const response = await POST(request);
-
-    expect(response.status).toBe(401);
-    expect(consumeMock).not.toHaveBeenCalled();
-    expect(sendReplyMock).not.toHaveBeenCalled();
-  });
-
-  it("rechaza con 401 si TELEGRAM_WEBHOOK_SECRET está configurada y el header falta", async () => {
-    process.env[SECRET_KEY] = "shh-secreto";
+    consumeMock.mockResolvedValue({ outcome: "invalid_code" });
     const request = makeRequest({ message: { chat: { id: 1, type: "private" }, text: "SIMI-ABC123" } });
 
     const response = await POST(request);
 
-    expect(response.status).toBe(401);
-    expect(consumeMock).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(consumeMock).toHaveBeenCalledWith("SIMI-ABC123", "1");
   });
 
-  it("acepta cuando el header coincide exactamente con TELEGRAM_WEBHOOK_SECRET", async () => {
+  it("procesa el update normalmente aunque el header no coincida con TELEGRAM_WEBHOOK_SECRET", async () => {
     process.env[SECRET_KEY] = "shh-secreto";
     consumeMock.mockResolvedValue({ outcome: "invalid_code" });
     const request = makeRequest(
       { message: { chat: { id: 1, type: "private" }, text: "algo" } },
-      { "x-telegram-bot-api-secret-token": "shh-secreto" },
+      { "x-telegram-bot-api-secret-token": "otro-valor" },
     );
 
     const response = await POST(request);
