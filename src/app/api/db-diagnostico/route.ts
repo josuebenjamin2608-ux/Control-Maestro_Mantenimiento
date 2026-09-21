@@ -21,10 +21,14 @@ import { Prisma } from "@/generated/prisma/client";
  *   interpolar dentro del mensaje de error.
  * - auditoría de schema (nombres de tabla/columna/migración — nunca datos
  *   de negocio): migraciones registradas en `_prisma_migrations`, columnas
- *   reales de `maintenance_requests` y `maintenance_request_technicians`,
- *   y si existe el tipo enum `MaintenanceRequestResponsibleArea`. TODAS las
- *   consultas de esta sección son SELECT puros contra el catálogo de
- *   Postgres (information_schema/pg_type) o una lectura de
+ *   reales de `maintenance_requests`, `maintenance_request_technicians` y
+ *   `technicians` (agregado para diagnosticar P2022 sobre
+ *   technicians.telegramChatId/telegramLinkedAt), el `current_schema()` de
+ *   la conexión activa (para distinguir "columna no existe" de "columna
+ *   existe pero en otro schema"), y si existe el tipo enum
+ *   `MaintenanceRequestResponsibleArea`. TODAS las consultas de esta
+ *   sección son SELECT puros contra el catálogo de Postgres
+ *   (information_schema/pg_type/current_schema()) o una lectura de
  *   `_prisma_migrations` — ninguna DDL, ninguna escritura, ninguna lectura
  *   de filas de negocio.
  */
@@ -117,6 +121,21 @@ const EXPECTED_MAINTENANCE_REQUEST_TECHNICIAN_COLUMNS = [
   "removedAt",
 ];
 
+/** Ídem, modelo Technician — agregado para diagnosticar P2022 sobre telegramChatId/telegramLinkedAt. */
+const EXPECTED_TECHNICIAN_COLUMNS = [
+  "id",
+  "employeeCode",
+  "fullName",
+  "specialty",
+  "phone",
+  "isActive",
+  "userId",
+  "telegramChatId",
+  "telegramLinkedAt",
+  "createdAt",
+  "updatedAt",
+];
+
 /** Carpetas de prisma/migrations/ en el repo, en orden — informativo, no requiere acceso a la base. */
 const REPO_MIGRATIONS = [
   "20260908031225_initial",
@@ -148,6 +167,9 @@ interface SchemaAudit {
   missingMaintenanceRequestColumns: string[] | null;
   maintenanceRequestTechnicianColumns: { column: string; type: string; nullable: boolean }[] | null;
   missingMaintenanceRequestTechnicianColumns: string[] | null;
+  technicianColumns: { column: string; type: string; nullable: boolean }[] | null;
+  missingTechnicianColumns: string[] | null;
+  currentSchema: string | null;
   responsibleAreaEnumExists: boolean | null;
   errorMessageSafe: string | null;
 }
@@ -233,6 +255,32 @@ async function auditSchema(): Promise<SchemaAudit> {
     errors.push(`maintenance_request_technicians columns: ${sanitizeErrorMessage(message)}`);
   }
 
+  let technicianColumns: SchemaAudit["technicianColumns"] = null;
+  let missingTechnicianColumns: string[] | null = null;
+  try {
+    const columns = await getColumns("technicians");
+    technicianColumns = columns;
+    const actual = new Set(columns.map((c) => c.column));
+    missingTechnicianColumns = EXPECTED_TECHNICIAN_COLUMNS.filter((c) => !actual.has(c));
+  } catch (error) {
+    const { message } = describeError(error);
+    errors.push(`technicians columns: ${sanitizeErrorMessage(message)}`);
+  }
+
+  // Distingue P2022 "columna no existe" (hipótesis A) de "columna existe pero
+  // en otro schema" (hipótesis B, ver getColumns arriba — fija
+  // table_schema = 'public'): si current_schema() no es 'public', las
+  // consultas de columnas de esta función pueden estar mirando un schema
+  // distinto al que realmente usa el search_path de la conexión activa.
+  let currentSchema: string | null = null;
+  try {
+    const rows = await db.$queryRaw<{ current_schema: string }[]>`SELECT current_schema()`;
+    currentSchema = rows[0]?.current_schema ?? null;
+  } catch (error) {
+    const { message } = describeError(error);
+    errors.push(`current_schema: ${sanitizeErrorMessage(message)}`);
+  }
+
   let responsibleAreaEnumExists: boolean | null = null;
   try {
     const rows = await db.$queryRaw<{ exists: boolean }[]>`
@@ -255,6 +303,9 @@ async function auditSchema(): Promise<SchemaAudit> {
     missingMaintenanceRequestColumns,
     maintenanceRequestTechnicianColumns,
     missingMaintenanceRequestTechnicianColumns,
+    technicianColumns,
+    missingTechnicianColumns,
+    currentSchema,
     responsibleAreaEnumExists,
     errorMessageSafe: errors.length > 0 ? errors.join(" | ").slice(0, 1000) : null,
   };
