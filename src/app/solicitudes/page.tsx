@@ -1,5 +1,6 @@
 import { AppShell } from "@/components/layout/app-shell";
 import { RouteTabs } from "@/components/layout/route-tabs";
+import { ExportExcelButton } from "@/components/solicitudes/export-excel-button";
 import { Pagination } from "@/components/solicitudes/pagination";
 import { SolicitudesFilters } from "@/components/solicitudes/solicitudes-filters";
 import { SolicitudesTable } from "@/components/solicitudes/solicitudes-table";
@@ -55,11 +56,15 @@ export default async function SolicitudesPage({
   return (
     <AppShell title="Solicitudes">
       <div className="mx-auto flex max-w-6xl flex-col gap-6">
-        <div className="flex flex-col gap-1">
-          <h2 className="text-xl font-semibold text-foreground">Registro de Solicitudes</h2>
-          <p className="text-sm text-muted-foreground">
-            {total} solicitud{total === 1 ? "" : "es"} registrada{total === 1 ? "" : "s"}.
-          </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex flex-col gap-1">
+            <h2 className="text-xl font-semibold text-foreground">Registro de Solicitudes</h2>
+            <p className="text-sm text-muted-foreground">
+              {total} solicitud{total === 1 ? "" : "es"} registrada{total === 1 ? "" : "s"}.
+            </p>
+          </div>
+
+          <ExportExcelButton q={q} maquina={maquina} estado={estado} responsable={responsable} />
         </div>
 
         <RouteTabs tabs={TABS} />

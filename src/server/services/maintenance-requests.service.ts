@@ -41,8 +41,17 @@ export interface ListMaintenanceRequestsParams {
   skip?: number;
 }
 
-export async function listMaintenanceRequests(params: ListMaintenanceRequestsParams = {}) {
-  const { search, maquina, estado, responsable, take = 50, skip = 0 } = params;
+/**
+ * WHERE compartido por listMaintenanceRequests (tabla paginada de
+ * /solicitudes) y listMaintenanceRequestsForExport (exportación a Excel):
+ * misma definición de filtro en un único lugar para que la exportación
+ * respete EXACTAMENTE los mismos filtros que la tabla, sin una segunda
+ * lógica que pueda divergir.
+ */
+function buildMaintenanceRequestWhere(
+  params: Pick<ListMaintenanceRequestsParams, "search" | "maquina" | "estado" | "responsable">,
+): Prisma.MaintenanceRequestWhereInput | undefined {
+  const { search, maquina, estado, responsable } = params;
   const trimmedSearch = search?.trim();
 
   const conditions: Prisma.MaintenanceRequestWhereInput[] = [];
@@ -63,9 +72,12 @@ export async function listMaintenanceRequests(params: ListMaintenanceRequestsPar
     conditions.push({ responsibleArea: responsable });
   }
 
-  const where: Prisma.MaintenanceRequestWhereInput | undefined = conditions.length
-    ? { AND: conditions }
-    : undefined;
+  return conditions.length ? { AND: conditions } : undefined;
+}
+
+export async function listMaintenanceRequests(params: ListMaintenanceRequestsParams = {}) {
+  const { take = 50, skip = 0 } = params;
+  const where = buildMaintenanceRequestWhere(params);
 
   const [items, total] = await Promise.all([
     db.maintenanceRequest.findMany({
@@ -79,6 +91,19 @@ export async function listMaintenanceRequests(params: ListMaintenanceRequestsPar
   ]);
 
   return { items, total };
+}
+
+/**
+ * Mismas condiciones de filtro que listMaintenanceRequests (ver
+ * buildMaintenanceRequestWhere), pero SIN paginar: trae todas las
+ * solicitudes que cumplen el filtro, para la exportación a Excel de
+ * /solicitudes — nunca solo la página actualmente visible en la tabla.
+ */
+export function listMaintenanceRequestsForExport(
+  params: Pick<ListMaintenanceRequestsParams, "search" | "maquina" | "estado" | "responsable"> = {},
+) {
+  const where = buildMaintenanceRequestWhere(params);
+  return db.maintenanceRequest.findMany({ where, orderBy: { fecha: "desc" } });
 }
 
 /** Valores reales de MAQUINA presentes en las solicitudes, para el filtro. */

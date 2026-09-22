@@ -350,10 +350,11 @@ export async function getMonthlyCountsForYear(year: number): Promise<MonthPoint[
  * (relationStatus = RELATED, con FECHAFIN no nulo) — es la única fecha de
  * cierre real que existe en el sistema hoy (ver nota en getComplianceBreakdown).
  * Se extrae una vez y se reutiliza tanto para "Cerradas del período" como
- * para "Cumplimiento de compromisos", para no mantener dos lecturas de
- * MaintenanceLog que puedan divergir.
+ * para "Cumplimiento de compromisos" y para "Fecha de Atención Evento" en la
+ * exportación a Excel de /solicitudes (ver solicitudes-export.service.ts),
+ * para no mantener dos lecturas de MaintenanceLog que puedan divergir.
  */
-async function getLatestFechafinByRequest(): Promise<Map<string, Date>> {
+export async function getLatestFechafinByRequest(): Promise<Map<string, Date>> {
   const relatedLogs = await db.maintenanceLog.findMany({
     where: { relationStatus: "RELATED", fechafin: { not: null }, maintenanceRequestId: { not: null } },
     select: { maintenanceRequestId: true, fechafin: true },

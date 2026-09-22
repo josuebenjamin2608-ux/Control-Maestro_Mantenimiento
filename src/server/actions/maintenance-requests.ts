@@ -4,6 +4,11 @@ import { revalidatePath } from "next/cache";
 
 import { db } from "@/lib/db";
 import type { MaintenanceRequestResponsibleArea } from "@/generated/prisma/client";
+import {
+  buildSolicitudesExportFileName,
+  buildSolicitudesExportWorkbook,
+  type SolicitudesExportFilters,
+} from "@/server/services/exports/solicitudes-export.service";
 
 export type ActionResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
@@ -84,4 +89,26 @@ export async function setMaintenanceRequestCommitmentDate(
 
   revalidatePath(`/solicitudes/${encodeURIComponent(request.parte)}`);
   return { ok: true, data: null };
+}
+
+/**
+ * Excel de "Detalle de Solicitudes" para el botón "Exportar Excel" de
+ * /solicitudes — respeta EXACTAMENTE los mismos filtros (search/maquina/
+ * estado/responsable) que la tabla ya aplica, nunca todas las solicitudes
+ * sin filtrar. Solo lectura: no crea, modifica ni borra ningún registro.
+ * Devuelve el .xlsx en base64 (Server Action, no puede devolver un
+ * ReadableStream/Buffer crudo al cliente) para que el botón lo convierta en
+ * un Blob y dispare la descarga.
+ */
+export async function exportSolicitudesToExcel(
+  filters: SolicitudesExportFilters,
+): Promise<ActionResult<{ base64: string; fileName: string }>> {
+  const buffer = await buildSolicitudesExportWorkbook(filters);
+  return {
+    ok: true,
+    data: {
+      base64: Buffer.from(buffer).toString("base64"),
+      fileName: buildSolicitudesExportFileName(),
+    },
+  };
 }
