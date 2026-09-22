@@ -3,15 +3,17 @@ import Link from "next/link";
 import { AppShell } from "@/components/layout/app-shell";
 import { InteractiveBacklogCard } from "@/components/indicadores/backlog-card-interactive";
 import { ComparisonCard } from "@/components/indicadores/comparison-card";
+import { ComplianceSection } from "@/components/indicadores/compliance-section";
 import { CurrentStateRow } from "@/components/indicadores/current-state-row";
 import { EstadoDistribution } from "@/components/indicadores/estado-distribution";
 import { IndicatorModalProvider } from "@/components/indicadores/indicator-modal-context";
 import { KpiRow } from "@/components/indicadores/kpi-row";
 import { MachineHighlights } from "@/components/indicadores/machine-highlights";
-import { OpenTasksSection } from "@/components/indicadores/open-tasks-section";
+import { MaintenanceIndicatorsSection } from "@/components/indicadores/maintenance-indicators-section";
 import { OperatorHighlights } from "@/components/indicadores/operator-highlights";
 import { PeriodFilterBar } from "@/components/indicadores/period-filter-bar";
-import { ResponsibleAreaDistribution } from "@/components/indicadores/responsible-area-distribution";
+import { ResponsibleAreaBreakdown } from "@/components/indicadores/responsible-area-breakdown";
+import { UpcomingCommitmentsSection } from "@/components/indicadores/upcoming-commitments-section";
 import { YearMonthlyChart } from "@/components/indicadores/year-monthly-chart";
 import {
   Card,
@@ -23,15 +25,16 @@ import {
 import { formatPeriodLabel, getPeriodRange, type Period } from "@/lib/period";
 import {
   getAvailableYears,
-  getBacklogBreakdown,
+  getBacklogAgeBuckets,
   getClosedTasksForPeriod,
+  getComplianceSummary,
   getMachineDistributionForPeriod,
   getMonthlyCountsForYear,
   getOperatorDistributionForPeriod,
   getPeriodSnapshot,
   getPeriodStats,
   getPreviousPeriodOf,
-  getResponsibleAreaDistributionForPeriod,
+  getUpcomingCommitments,
   getYearPeriodRange,
   type PeriodSnapshot,
 } from "@/server/services/indicators.service";
@@ -43,6 +46,8 @@ import {
 // Consulta la base de datos: debe resolverse en cada request, no se puede
 // pre-renderizar en build.
 export const dynamic = "force-dynamic";
+
+const UPCOMING_COMMITMENTS_LIMIT = 20;
 
 function buildIndicadoresHref(year: number, month: number) {
   return `/indicadores?year=${year}&month=${month}`;
@@ -97,28 +102,31 @@ export default async function IndicadoresPage({
     operatorData,
     monthlyData,
     previousSnapshot,
-    responsibleAreaData,
     openCounts,
     openResponsibleAreaData,
+    complianceSummary,
+    upcomingCommitments,
   ] = await Promise.all([
     getPeriodStats(start, end),
     getClosedTasksForPeriod(start, end),
-    getBacklogBreakdown(start),
+    // "Backlog de mantenimiento": mismo universo que "Total abierto" (ESTADO
+    // != Realizado, SIN filtro de FECHA) — independiente del período
+    // seleccionado, ver getBacklogAgeBuckets.
+    getBacklogAgeBuckets(),
     getMachineDistributionForPeriod(start, end, 10),
     getOperatorDistributionForPeriod(start, end, 10),
     getMonthlyCountsForYear(selectedYear),
     // "Mes anterior" no tiene un equivalente claro en modo año completo — se
     // omite la consulta y la tarjeta de comparación no se muestra (ver más abajo).
     isYearMode ? Promise.resolve(null) : getPeriodSnapshot(previousPeriod),
-    getResponsibleAreaDistributionForPeriod(start, end),
-    // "Estado actual de la operación" y el botón "Tareas abiertas": ESTADO !=
-    // Realizado, SIN filtro de FECHA — independiente del período
+    // "Estado actual de la operación" y "Distribución por responsable":
+    // ESTADO != Realizado, SIN filtro de FECHA — independiente del período
     // seleccionado (misma fuente que el Dashboard, ver
-    // maintenance-requests.service.ts). No se toca la definición existente
-    // de "Distribución por responsable" (period-scoped, arriba) — esta es
-    // la versión ABIERTA/histórica que ya usa el Dashboard.
+    // maintenance-requests.service.ts).
     getOpenBucketCounts(),
     getOpenRequestsByResponsibleArea(),
+    getComplianceSummary(),
+    getUpcomingCommitments(UPCOMING_COMMITMENTS_LIMIT),
   ]);
 
   const periodLabel = isYearMode ? `Año ${selectedYear} completo` : formatPeriodLabel(period);
@@ -175,22 +183,13 @@ export default async function IndicadoresPage({
             </Card>
           ) : null}
 
+          {/* 1. Indicadores del período — autoexplicativos vía título/valor/subtítulo corto de cada tarjeta. */}
           <div className="flex flex-col gap-1.5">
             <h3 className="text-sm font-semibold text-foreground">Indicadores del período</h3>
             <KpiRow stats={stats} closedTasks={closedTasks} />
-            <p className="text-xs text-muted-foreground">
-              Los KPI de arriba cuentan solo solicitudes con FECHA dentro del período seleccionado
-              ({periodLabel}). Es un concepto distinto de &quot;Estado actual de la operación&quot; (abajo) y
-              de las tarjetas &quot;Pendientes&quot;/&quot;En espera&quot; del Panel de control, que muestran el total
-              abierto (ESTADO != Realizado) sin importar la fecha. Todas las cifras son correctas;
-              miden cosas distintas.
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Cerradas: solicitudes cuyas Minutas relacionadas registran FECHAFIN dentro del período
-              (última finalización cuando hay varias). Según cierres registrados en Minutas.
-            </p>
           </div>
 
+          {/* 2. Estado actual de la operación — independiente del período seleccionado. */}
           <div className="flex flex-col gap-1.5">
             <h3 className="text-sm font-semibold text-foreground">Estado actual de la operación</h3>
             <p className="text-xs text-muted-foreground">
@@ -199,91 +198,108 @@ export default async function IndicadoresPage({
             <CurrentStateRow counts={openCounts} />
           </div>
 
+          {/* 3. Backlog de mantenimiento — mismo universo que "Total abierto", antigüedad en 4 rangos excluyentes. */}
           <div className="flex flex-col gap-1.5">
-            <h3 className="text-sm font-semibold text-foreground">Tareas abiertas</h3>
+            <h3 className="text-sm font-semibold text-foreground">Backlog de mantenimiento</h3>
+            <Card>
+              <CardContent className="pt-6">
+                <InteractiveBacklogCard backlog={backlog} />
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* 4-5. Distribución por responsable — mismo universo que el Backlog, cada área expandible/contraíble. */}
+          <div className="flex flex-col gap-1.5">
+            <h3 className="text-sm font-semibold text-foreground">Distribución por responsable</h3>
             <p className="text-xs text-muted-foreground">
-              Mismo backlog operativo que &quot;Estado actual de la operación&quot;: solicitudes con
-              ESTADO != Realizado, sin importar la fecha en que fueron creadas.
+              Solicitudes abiertas actualmente por área responsable — mismo universo que el Backlog.
+              Clic en un área para ver/ocultar su detalle.
             </p>
-            <OpenTasksSection
-              counts={openCounts}
-              responsibleArea={openResponsibleAreaData}
+            <Card>
+              <CardContent className="pt-6">
+                <ResponsibleAreaBreakdown summary={openResponsibleAreaData} backHref={currentIndicadoresHref} />
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* 6. Cumplimiento de compromisos. */}
+          <div className="flex flex-col gap-1.5">
+            <h3 className="text-sm font-semibold text-foreground">Cumplimiento de compromisos</h3>
+            <ComplianceSection summary={complianceSummary} />
+          </div>
+
+          {/* 7. Indicadores de mantenimiento — MTTR/MTBF, estructura reservada, sin calcular todavía. */}
+          <div className="flex flex-col gap-1.5">
+            <h3 className="text-sm font-semibold text-foreground">Indicadores de mantenimiento</h3>
+            <MaintenanceIndicatorsSection />
+          </div>
+
+          {/* 8. Análisis histórico. */}
+          <div className="flex flex-col gap-3">
+            <h3 className="text-sm font-semibold text-foreground">Análisis histórico</h3>
+
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base text-foreground">Solicitudes por mes — {selectedYear}</CardTitle>
+                  <CardDescription>
+                    {isYearMode ? "Vista del año completo." : "El mes seleccionado se resalta."}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <YearMonthlyChart
+                    data={monthlyData}
+                    year={selectedYear}
+                    highlightMonth={isYearMode ? undefined : selectedMonth}
+                  />
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base text-foreground">Distribución por estado</CardTitle>
+                  <CardDescription>Proporción real sobre las solicitudes del período.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <EstadoDistribution stats={stats} />
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base text-foreground">Máquinas con más solicitudes</CardTitle>
+                  <CardDescription>Top 10 del período seleccionado.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <MachineHighlights items={machineData.items} />
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base text-foreground">Solicitudes por operario</CardTitle>
+                  <CardDescription>Top 10 de quién registra más solicitudes en el período.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <OperatorHighlights items={operatorData.items} />
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+
+          {/* 9. Próximas a vencer. */}
+          <div className="flex flex-col gap-1.5">
+            <h3 className="text-sm font-semibold text-foreground">Próximas a vencer</h3>
+            <UpcomingCommitmentsSection
+              items={upcomingCommitments.items}
+              total={upcomingCommitments.total}
               backHref={currentIndicadoresHref}
             />
           </div>
 
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base text-foreground">Solicitudes por mes — {selectedYear}</CardTitle>
-                <CardDescription>
-                  {isYearMode ? "Vista del año completo." : "El mes seleccionado se resalta."}
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <YearMonthlyChart
-                  data={monthlyData}
-                  year={selectedYear}
-                  highlightMonth={isYearMode ? undefined : selectedMonth}
-                />
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base text-foreground">Distribución por estado</CardTitle>
-                <CardDescription>Proporción real sobre las solicitudes del período.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <EstadoDistribution stats={stats} />
-              </CardContent>
-            </Card>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base text-foreground">Máquinas con más solicitudes</CardTitle>
-                <CardDescription>Top 10 del período seleccionado.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <MachineHighlights items={machineData.items} />
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base text-foreground">Solicitudes por operario</CardTitle>
-                <CardDescription>Top 10 de quién registra más solicitudes en el período.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <OperatorHighlights items={operatorData.items} />
-              </CardContent>
-            </Card>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base text-foreground">Backlog de mantenimiento</CardTitle>
-                <CardDescription>Solicitudes abiertas que arrastra el sistema.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <InteractiveBacklogCard backlog={backlog} />
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base text-foreground">Distribución por responsable</CardTitle>
-                <CardDescription>Solicitudes del período por área responsable.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ResponsibleAreaDistribution breakdown={responsibleAreaData} />
-              </CardContent>
-            </Card>
-          </div>
-
+          {/* 10. Comparación con el mes anterior — al final, a propósito. */}
           {!isYearMode && previousSnapshot ? (
             <Card>
               <CardHeader className="pb-2">

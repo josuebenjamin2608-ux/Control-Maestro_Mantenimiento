@@ -176,7 +176,7 @@ export { getBucketStatValue } from "@/lib/estado";
  * valores DISTINCT de ESTADO realmente presentes (vía classifyEstado), nunca
  * de una lista inventada. Única fuente de verdad de "abierta" compartida por
  * el Dashboard (listOperationalMaintenanceRequests/getOpenBucketCounts) e
- * Indicadores (getBacklogBeforePeriod/getBacklogBreakdown en
+ * Indicadores (getBacklogBeforePeriod/getBacklogAgeBuckets en
  * indicators.service.ts), para no mantener dos definiciones que puedan
  * divergir.
  */

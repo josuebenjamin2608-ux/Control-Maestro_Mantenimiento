@@ -1,35 +1,45 @@
 "use client";
 
-import type { BacklogBreakdown } from "@/server/services/indicators.service";
+import type { BacklogAgeBuckets } from "@/server/services/indicators.service";
 import { BacklogCard, type BacklogStatKind } from "./backlog-card";
 import { useIndicatorModal } from "./indicator-modal-context";
 import type { IndicatorDescriptor } from "./indicator-detail-modal";
 
 const DESCRIPTOR_BY_KIND: Record<BacklogStatKind, IndicatorDescriptor> = {
   total: {
-    title: "Backlog",
-    subtitle: "Solicitudes sin Realizado, con fecha anterior al período seleccionado",
-    query: { indicator: "backlog" },
+    title: "Backlog — Total abierto",
+    subtitle: "Solicitudes con ESTADO != Realizado, sin importar la fecha (igual a \"Total abierto\")",
+    query: { indicator: "totalAbierto" },
   },
-  over7: {
-    title: "Backlog +7 días",
-    subtitle: "Solicitudes abiertas con FECHA de más de 7 días respecto a hoy",
-    query: { indicator: "backlogOver7" },
+  days0to5: {
+    title: "Backlog 0-5 días",
+    subtitle: "Solicitudes abiertas con FECHA de entre 0 y 5 días respecto a hoy",
+    query: { indicator: "backlogDays0to5" },
   },
-  over15: {
-    title: "Backlog +15 días",
-    subtitle: "Solicitudes abiertas con FECHA de más de 15 días respecto a hoy",
-    query: { indicator: "backlogOver15" },
+  days6to15: {
+    title: "Backlog 6-15 días",
+    subtitle: "Solicitudes abiertas con FECHA de entre 6 y 15 días respecto a hoy",
+    query: { indicator: "backlogDays6to15" },
   },
-  over30: {
+  days16to30: {
+    title: "Backlog 16-30 días",
+    subtitle: "Solicitudes abiertas con FECHA de entre 16 y 30 días respecto a hoy",
+    query: { indicator: "backlogDays16to30" },
+  },
+  daysOver30: {
     title: "Backlog +30 días",
     subtitle: "Solicitudes abiertas con FECHA de más de 30 días respecto a hoy",
-    query: { indicator: "backlogOver30" },
+    query: { indicator: "backlogDaysOver30" },
+  },
+  sinFecha: {
+    title: "Backlog — Sin fecha",
+    subtitle: "Solicitudes abiertas sin FECHA registrada: antigüedad no determinable",
+    query: { indicator: "backlogSinFecha" },
   },
 };
 
-/** Versión interactiva de BacklogCard, usada solo en /indicadores. El Dashboard sigue usando BacklogCard directamente, sin este wrapper. */
-export function InteractiveBacklogCard({ backlog }: { backlog: BacklogBreakdown }) {
+/** Versión interactiva de BacklogCard, usada solo en /indicadores. */
+export function InteractiveBacklogCard({ backlog }: { backlog: BacklogAgeBuckets }) {
   const { openIndicator } = useIndicatorModal();
 
   return (

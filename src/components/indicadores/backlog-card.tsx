@@ -1,29 +1,34 @@
 import { AlertTriangle } from "lucide-react";
 
-import type { BacklogBreakdown } from "@/server/services/indicators.service";
+import type { BacklogAgeBuckets } from "@/server/services/indicators.service";
 
-export type BacklogStatKind = "total" | "over7" | "over15" | "over30";
+export type BacklogStatKind =
+  | "total"
+  | "days0to5"
+  | "days6to15"
+  | "days16to30"
+  | "daysOver30"
+  | "sinFecha";
 
 /**
- * `onSelect` es opcional a propósito: este componente lo reutiliza también
- * el Dashboard (/) sin interactividad. Cuando se omite, cada bloque se
- * renderiza como el mismo `<div>` estático de siempre — cero cambios de
- * markup/estilo en el Dashboard. Solo /indicadores lo pasa (vía
+ * `onSelect` es opcional a propósito: este componente antes también lo
+ * reutilizaba el Dashboard (/) sin interactividad, pero ese uso ya no existe
+ * (el Dashboard usa EstadoBreakdownCard/ResponsibleAreaCard) — se conserva
+ * la opcionalidad por si /indicadores necesita renderizarlo sin abrir el
+ * modal en algún contexto futuro. Sin `onSelect`, cada bloque se renderiza
+ * como un `<div>` estático; /indicadores siempre lo pasa (vía
  * InteractiveBacklogCard), y ahí cada bloque se vuelve un `<button>`.
  *
- * `totalCaption` es opcional por la misma razón: /indicadores no lo pasa
- * (conserva el texto de siempre, "... anterior al período seleccionado"),
- * mientras que el Dashboard sí lo pasa porque ahí `backlog.total` ya no es
- * relativo a un período sino el total real de solicitudes abiertas.
+ * `backlog.total` es el MISMO número que "Total abierto" (mismo universo:
+ * ESTADO != Realizado, sin filtro de FECHA) — nunca relativo al período
+ * seleccionado.
  */
 export function BacklogCard({
   backlog,
   onSelect,
-  totalCaption = "Solicitudes sin Realizado, con fecha anterior al período seleccionado",
 }: {
-  backlog: BacklogBreakdown;
+  backlog: BacklogAgeBuckets;
   onSelect?: (kind: BacklogStatKind) => void;
-  totalCaption?: string;
 }) {
   const totalClassName =
     "flex items-center gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3" +
@@ -36,15 +41,20 @@ export function BacklogCard({
       <AlertTriangle className="size-5 shrink-0 text-destructive" />
       <div className="flex flex-col">
         <span className="text-2xl font-semibold text-foreground">{backlog.total}</span>
-        <span className="text-xs text-muted-foreground">{totalCaption}</span>
+        <span className="text-xs text-muted-foreground">
+          Solicitudes abiertas (ESTADO != Realizado), sin importar la fecha — igual a &quot;Total
+          abierto&quot;
+        </span>
       </div>
     </>
   );
 
   const stats: { kind: BacklogStatKind; value: number; label: string }[] = [
-    { kind: "over7", value: backlog.over7Days, label: "+7 días" },
-    { kind: "over15", value: backlog.over15Days, label: "+15 días" },
-    { kind: "over30", value: backlog.over30Days, label: "+30 días" },
+    { kind: "days0to5", value: backlog.days0to5, label: "0-5 días" },
+    { kind: "days6to15", value: backlog.days6to15, label: "6-15 días" },
+    { kind: "days16to30", value: backlog.days16to30, label: "16-30 días" },
+    { kind: "daysOver30", value: backlog.daysOver30, label: "+30 días" },
+    { kind: "sinFecha", value: backlog.sinFecha, label: "Sin fecha" },
   ];
 
   const statClassName =
@@ -69,7 +79,7 @@ export function BacklogCard({
         <div className={totalClassName}>{totalContent}</div>
       )}
 
-      <div className="grid grid-cols-3 gap-2 text-center">
+      <div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-5">
         {stats.map((stat) =>
           onSelect ? (
             <button
@@ -89,8 +99,10 @@ export function BacklogCard({
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Los umbrales de +7 / +15 / +30 días se calculan contra la fecha actual del sistema, no
-        contra el período seleccionado.
+        Cada solicitud abierta cae en exactamente una de las 5 categorías (los 4 rangos se calculan
+        contra la fecha actual del sistema, no contra el período seleccionado; &quot;Sin fecha&quot;
+        agrupa las que no tienen FECHA registrada, sin asumir una antigüedad) — por eso siempre
+        suman el total de arriba.
       </p>
     </div>
   );

@@ -86,42 +86,78 @@ export async function getBacklogBeforePeriod(periodStart: Date): Promise<number>
   });
 }
 
-export interface BacklogBreakdown {
-  /** Igual a getBacklogBeforePeriod: backlog respecto al período seleccionado. */
+export type BacklogAgeBucketKind =
+  | "days0to5"
+  | "days6to15"
+  | "days16to30"
+  | "daysOver30"
+  | "sinFecha";
+
+/**
+ * Where-clause EXCLUYENTE para un rango de antigüedad del backlog (en días
+ * enteros transcurridos desde FECHA hasta hoy, floor — mismo criterio que
+ * `daysSince` en lib/estado.ts), calculado siempre contra la fecha actual del
+ * sistema, nunca contra el período seleccionado. Los 3 cortes (6, 16, 31 días)
+ * hacen que los rangos con FECHA sean disjuntos por construcción: días<6 ->
+ * 0-5, 6<=días<16 -> 6-15, 16<=días<31 -> 16-30, días>=31 -> +30. FECHA nula
+ * (antigüedad NO determinable) tiene su propia categoría "Sin fecha" — nunca
+ * se asume ni "reciente" ni "vieja" para una solicitud cuya antigüedad no se
+ * puede calcular (ver getBacklogAgeBuckets). Reutilizado tanto para el
+ * conteo agregado como para el detalle de cada rango en
+ * getIndicatorRequests, así ambos números nunca pueden divergir.
+ */
+function getBacklogAgeBucketWhere(bucket: BacklogAgeBucketKind): Prisma.MaintenanceRequestWhereInput {
+  const day = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const t6 = new Date(now - 6 * day);
+  const t16 = new Date(now - 16 * day);
+  const t31 = new Date(now - 31 * day);
+
+  switch (bucket) {
+    case "days0to5":
+      return { fecha: { gt: t6 } };
+    case "days6to15":
+      return { fecha: { lte: t6, gt: t16 } };
+    case "days16to30":
+      return { fecha: { lte: t16, gt: t31 } };
+    case "daysOver30":
+      return { fecha: { lte: t31 } };
+    case "sinFecha":
+      return { fecha: null };
+  }
+}
+
+export interface BacklogAgeBuckets {
+  /** Mismo universo y mismo número que "Total abierto" (getOpenBucketCounts().totalAbiertas): ESTADO != Realizado, sin filtro de FECHA. */
   total: number;
-  /** Estos tres se calculan sobre TODO el backlog abierto (no solo el previo al período),
-   *  usando la fecha actual del sistema como referencia de antigüedad. */
-  over7Days: number;
-  over15Days: number;
-  over30Days: number;
+  days0to5: number;
+  days6to15: number;
+  days16to30: number;
+  daysOver30: number;
+  /** FECHA nula: antigüedad no determinable — nunca se asume dentro de ningún rango de días. */
+  sinFecha: number;
 }
 
 /**
- * Desglose de antigüedad del backlog. `total` respeta el período
- * seleccionado (igual definición que "Pendientes acumuladas"); los tres
- * umbrales de días se calculan siempre contra la fecha actual del sistema
- * (no contra el período), porque representan qué tan vieja es la
- * solicitud abierta *hoy* — se documenta así también en la UI.
+ * Antigüedad del backlog actual, en 5 categorías MUTUAMENTE EXCLUYENTES que
+ * siempre suman exactamente `total` (y por lo tanto "Total abierto"): cada
+ * solicitud abierta cae en exactamente una de las 5 (ver
+ * getBacklogAgeBucketWhere) — las 4 con FECHA real, más "Sin fecha" para las
+ * que no tienen antigüedad determinable.
  */
-export async function getBacklogBreakdown(periodStart: Date): Promise<BacklogBreakdown> {
+export async function getBacklogAgeBuckets(): Promise<BacklogAgeBuckets> {
   const estadoWhere = await getNonAtendidaEstadoWhere();
-  const now = new Date();
-  const day = 24 * 60 * 60 * 1000;
 
-  const [total, over7Days, over15Days, over30Days] = await Promise.all([
-    db.maintenanceRequest.count({ where: { fecha: { lt: periodStart }, ...estadoWhere } }),
-    db.maintenanceRequest.count({
-      where: { fecha: { lt: new Date(now.getTime() - 7 * day) }, ...estadoWhere },
-    }),
-    db.maintenanceRequest.count({
-      where: { fecha: { lt: new Date(now.getTime() - 15 * day) }, ...estadoWhere },
-    }),
-    db.maintenanceRequest.count({
-      where: { fecha: { lt: new Date(now.getTime() - 30 * day) }, ...estadoWhere },
-    }),
+  const [total, days0to5, days6to15, days16to30, daysOver30, sinFecha] = await Promise.all([
+    db.maintenanceRequest.count({ where: estadoWhere }),
+    db.maintenanceRequest.count({ where: { AND: [estadoWhere, getBacklogAgeBucketWhere("days0to5")] } }),
+    db.maintenanceRequest.count({ where: { AND: [estadoWhere, getBacklogAgeBucketWhere("days6to15")] } }),
+    db.maintenanceRequest.count({ where: { AND: [estadoWhere, getBacklogAgeBucketWhere("days16to30")] } }),
+    db.maintenanceRequest.count({ where: { AND: [estadoWhere, getBacklogAgeBucketWhere("daysOver30")] } }),
+    db.maintenanceRequest.count({ where: { AND: [estadoWhere, getBacklogAgeBucketWhere("sinFecha")] } }),
   ]);
 
-  return { total, over7Days, over15Days, over30Days };
+  return { total, days0to5, days6to15, days16to30, daysOver30, sinFecha };
 }
 
 export interface MachinePeriodItem {
@@ -263,9 +299,14 @@ export function getYearPeriodRange(year: number): { start: Date; end: Date } {
 }
 
 /**
- * Solicitudes por mes del año calendario dado (Enero-Diciembre). Los meses
- * sin datos reales simplemente cuentan 0 — nunca se inventa un valor para
- * un mes futuro o sin registros.
+ * Solicitudes por mes del año calendario dado. Los meses PASADOS sin datos
+ * reales cuentan 0 (histórico real). Los meses FUTUROS del año en curso ni
+ * siquiera se incluyen en el resultado (no solo en 0): un mes que todavía no
+ * llegó no puede tener datos reales, así que mostrarlo en 0 sugeriría una
+ * actividad nula en vez de "todavía no ocurrió". Cuando ese mes llega, deja
+ * de ser futuro y aparece automáticamente con sus datos reales (o en 0 si de
+ * verdad no hubo solicitudes) — ningún año pasado se recorta, siempre
+ * conserva sus 12 meses.
  */
 export async function getMonthlyCountsForYear(year: number): Promise<MonthPoint[]> {
   const { start, end } = getYearPeriodRange(year);
@@ -281,7 +322,14 @@ export async function getMonthlyCountsForYear(year: number): Promise<MonthPoint[
     if (row.fecha) counts[row.fecha.getUTCMonth()] += 1;
   }
 
-  return counts.map((count, index) => ({ month: index + 1, label: MONTH_LABELS[index], count }));
+  const now = new Date();
+  const currentYear = now.getUTCFullYear();
+  const currentMonth = now.getUTCMonth() + 1; // 1-12, en UTC (mismo ancla que FECHA)
+  const lastMonth = year < currentYear ? 12 : year === currentYear ? currentMonth : 0;
+
+  return counts
+    .slice(0, lastMonth)
+    .map((count, index) => ({ month: index + 1, label: MONTH_LABELS[index], count }));
 }
 
 /**
@@ -297,7 +345,15 @@ export async function getMonthlyCountsForYear(year: number): Promise<MonthPoint[
  * inventa un cierre para una Solicitud sin Minutas relacionadas con
  * FECHAFIN real.
  */
-async function getClosedRequestIdsForPeriod(start: Date, end: Date): Promise<string[]> {
+/**
+ * Último FECHAFIN por Solicitud, entre sus Minutas realmente relacionadas
+ * (relationStatus = RELATED, con FECHAFIN no nulo) — es la única fecha de
+ * cierre real que existe en el sistema hoy (ver nota en getComplianceBreakdown).
+ * Se extrae una vez y se reutiliza tanto para "Cerradas del período" como
+ * para "Cumplimiento de compromisos", para no mantener dos lecturas de
+ * MaintenanceLog que puedan divergir.
+ */
+async function getLatestFechafinByRequest(): Promise<Map<string, Date>> {
   const relatedLogs = await db.maintenanceLog.findMany({
     where: { relationStatus: "RELATED", fechafin: { not: null }, maintenanceRequestId: { not: null } },
     select: { maintenanceRequestId: true, fechafin: true },
@@ -311,6 +367,11 @@ async function getClosedRequestIdsForPeriod(start: Date, end: Date): Promise<str
       latestFechafinByRequest.set(log.maintenanceRequestId, log.fechafin);
     }
   }
+  return latestFechafinByRequest;
+}
+
+async function getClosedRequestIdsForPeriod(start: Date, end: Date): Promise<string[]> {
+  const latestFechafinByRequest = await getLatestFechafinByRequest();
 
   const closed: { id: string; fechafin: Date }[] = [];
   for (const [id, fechafin] of latestFechafinByRequest.entries()) {
@@ -325,36 +386,179 @@ export async function getClosedTasksForPeriod(start: Date, end: Date): Promise<n
   return (await getClosedRequestIdsForPeriod(start, end)).length;
 }
 
-export interface ResponsibleAreaPeriodBreakdown {
-  mantenimiento: number;
-  produccion: number;
-  /** responsibleArea = null. */
-  sinDefinir: number;
+/**
+ * Ventana de "próxima a vencer": no viene especificada por el negocio en la
+ * especificación original, así que se fija acá en un único lugar (7 días)
+ * para que el KPI y la lista de "Próximas a vencer" (getUpcomingCommitments)
+ * nunca puedan usar valores distintos. Es un umbral configurable, no un
+ * hecho de negocio verificado — se documenta también en la UI.
+ */
+const PROXIMA_A_VENCER_WINDOW_DAYS = 7;
+
+/**
+ * ids de Solicitudes VENCIDAS: tienen COMMITMENTDATE, no están atendidas
+ * (ESTADO != Realizado, misma definición que el resto del sistema) y su
+ * fecha compromiso ya pasó. No depende de Minutas: commitmentDate + estado
+ * alcanzan para esta definición.
+ */
+async function getVencidasRequestIds(): Promise<string[]> {
+  const estadoWhere = await getNonAtendidaEstadoWhere();
+  const rows = await db.maintenanceRequest.findMany({
+    where: { AND: [estadoWhere, { commitmentDate: { not: null, lt: new Date() } }] },
+    select: { id: true },
+    orderBy: { commitmentDate: "asc" },
+  });
+  return rows.map((row) => row.id);
 }
 
 /**
- * Distribución de Solicitudes del período por área responsable —
- * independiente de ESTADO (a diferencia de getPeriodStats/getClosedTasksForPeriod,
- * cuenta TODAS las solicitudes del período, no solo las abiertas).
+ * ids de Solicitudes PRÓXIMAS A VENCER: tienen COMMITMENTDATE, no están
+ * atendidas, y su fecha compromiso cae dentro de los próximos
+ * PROXIMA_A_VENCER_WINDOW_DAYS días (sin haber vencido todavía).
  */
-export async function getResponsibleAreaDistributionForPeriod(
-  start: Date,
-  end: Date,
-): Promise<ResponsibleAreaPeriodBreakdown> {
-  const grouped = await db.maintenanceRequest.groupBy({
-    by: ["responsibleArea"],
-    where: { fecha: { gte: start, lt: end } },
-    _count: { _all: true },
+async function getProximasAVencerRequestIds(): Promise<string[]> {
+  const estadoWhere = await getNonAtendidaEstadoWhere();
+  const now = new Date();
+  const windowEnd = new Date(now.getTime() + PROXIMA_A_VENCER_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  const rows = await db.maintenanceRequest.findMany({
+    where: { AND: [estadoWhere, { commitmentDate: { not: null, gte: now, lte: windowEnd } }] },
+    select: { id: true },
+    orderBy: { commitmentDate: "asc" },
   });
+  return rows.map((row) => row.id);
+}
 
-  const result: ResponsibleAreaPeriodBreakdown = { mantenimiento: 0, produccion: 0, sinDefinir: 0 };
-  for (const group of grouped) {
-    const count = group._count._all;
-    if (group.responsibleArea === "MANTENIMIENTO") result.mantenimiento += count;
-    else if (group.responsibleArea === "PRODUCCION") result.produccion += count;
-    else result.sinDefinir += count;
+/**
+ * CUMPLIDA/NO CUMPLIDA solo se pueden determinar para Solicitudes atendidas
+ * (Realizado) con COMMITMENTDATE Y una Minuta RELATED con FECHAFIN real (la
+ * única fecha de cierre real que existe hoy en el sistema — ver el punto 10
+ * de la especificación: no hay ningún timestamp de "cuándo pasó a
+ * Realizado"). Una Solicitud atendida-con-compromiso pero SIN esa Minuta
+ * queda en `sinFechaDeterminableIds`, fuera de cumplidas/no cumplidas y por
+ * lo tanto fuera de % cumplimiento — decisión explícita del usuario, no
+ * inventada acá.
+ */
+async function getComplianceBreakdown(): Promise<{
+  cumplidaIds: string[];
+  noCumplidaIds: string[];
+  sinFechaDeterminableIds: string[];
+}> {
+  const atendidaWhere = await getEstadoWhereForBucket("atendida");
+  const [rows, fechafinByRequest] = await Promise.all([
+    db.maintenanceRequest.findMany({
+      where: { AND: [atendidaWhere, { commitmentDate: { not: null } }] },
+      select: { id: true, commitmentDate: true },
+      orderBy: { commitmentDate: "desc" },
+    }),
+    getLatestFechafinByRequest(),
+  ]);
+
+  const cumplidaIds: string[] = [];
+  const noCumplidaIds: string[] = [];
+  const sinFechaDeterminableIds: string[] = [];
+  for (const row of rows) {
+    const fechafin = fechafinByRequest.get(row.id);
+    if (!fechafin || !row.commitmentDate) {
+      sinFechaDeterminableIds.push(row.id);
+      continue;
+    }
+    if (fechafin <= row.commitmentDate) cumplidaIds.push(row.id);
+    else noCumplidaIds.push(row.id);
   }
-  return result;
+  return { cumplidaIds, noCumplidaIds, sinFechaDeterminableIds };
+}
+
+export interface ComplianceSummary {
+  vencidas: number;
+  proximasAVencer: number;
+  /** Solo sobre atendidas con fecha de cierre determinable — ver getComplianceBreakdown. */
+  cumplidas: number;
+  noCumplidas: number;
+  /** cumplidas / (cumplidas + noCumplidas); null si ese subconjunto está vacío (evita dividir por 0). */
+  percentage: number | null;
+  /** Atendidas con compromiso pero sin Minuta RELATED con FECHAFIN: excluidas de cumplidas/% por falta de fecha real de cumplimiento. */
+  sinFechaDeterminable: number;
+}
+
+/** Resumen de "Cumplimiento de compromisos" — ver PROXIMA_A_VENCER_WINDOW_DAYS y getComplianceBreakdown para el alcance exacto de cada cifra. */
+export async function getComplianceSummary(): Promise<ComplianceSummary> {
+  const [vencidasIds, proximasIds, breakdown] = await Promise.all([
+    getVencidasRequestIds(),
+    getProximasAVencerRequestIds(),
+    getComplianceBreakdown(),
+  ]);
+
+  const determinableTotal = breakdown.cumplidaIds.length + breakdown.noCumplidaIds.length;
+  const percentage =
+    determinableTotal > 0 ? Math.round((breakdown.cumplidaIds.length / determinableTotal) * 100) : null;
+
+  return {
+    vencidas: vencidasIds.length,
+    proximasAVencer: proximasIds.length,
+    cumplidas: breakdown.cumplidaIds.length,
+    noCumplidas: breakdown.noCumplidaIds.length,
+    percentage,
+    sinFechaDeterminable: breakdown.sinFechaDeterminableIds.length,
+  };
+}
+
+export interface UpcomingCommitmentItem {
+  id: string;
+  parte: string;
+  maquina: string | null;
+  responsibleArea: MaintenanceRequestResponsibleArea | null;
+  technicianNames: string[];
+  commitmentDate: Date;
+  /** Math.ceil((commitmentDate - ahora) / día) — puede ser 0 (vence hoy). */
+  daysRemaining: number;
+}
+
+/**
+ * Lista compacta de "Próximas a vencer" (punto 11): reutiliza exactamente
+ * `getProximasAVencerRequestIds` (mismo universo y mismo orden que el KPI de
+ * "Cumplimiento de compromisos"), así la lista y el conteo nunca pueden
+ * divergir. `limit` acota cuántas se muestran, no cuántas existen — ver
+ * `total` en el resultado para saber si la lista fue recortada.
+ */
+export async function getUpcomingCommitments(
+  limit = 20,
+): Promise<{ items: UpcomingCommitmentItem[]; total: number }> {
+  const ids = await getProximasAVencerRequestIds();
+  if (ids.length === 0) return { items: [], total: 0 };
+
+  const pageIds = ids.slice(0, limit);
+  const rows = await db.maintenanceRequest.findMany({
+    where: { id: { in: pageIds } },
+    select: {
+      id: true,
+      parte: true,
+      maquina: true,
+      responsibleArea: true,
+      commitmentDate: true,
+      assignedTechnicians: {
+        where: { removedAt: null },
+        select: { technician: { select: { fullName: true } } },
+      },
+    },
+  });
+  const rowById = new Map(rows.map((row) => [row.id, row]));
+  const now = Date.now();
+  const day = 24 * 60 * 60 * 1000;
+
+  const items = pageIds
+    .map((id) => rowById.get(id))
+    .filter((row): row is NonNullable<typeof row> => row !== undefined && row.commitmentDate !== null)
+    .map((row) => ({
+      id: row.id,
+      parte: row.parte,
+      maquina: row.maquina,
+      responsibleArea: row.responsibleArea,
+      technicianNames: row.assignedTechnicians.map((assignment) => assignment.technician.fullName),
+      commitmentDate: row.commitmentDate as Date,
+      daysRemaining: Math.ceil(((row.commitmentDate as Date).getTime() - now) / day),
+    }));
+
+  return { items, total: ids.length };
 }
 
 export interface PeriodSnapshot {
@@ -398,17 +602,24 @@ export type IndicatorKind =
   | "estado"
   | "pctAtendidas"
   | "cerradas"
-  | "backlog"
-  | "backlogOver7"
-  | "backlogOver15"
-  | "backlogOver30"
   | "maquina"
-  | "responsable"
   | "operario"
   /** "Estado actual de la operación": TODAS las fechas, ESTADO != Realizado. Ver getNonAtendidaEstadoWhere. */
   | "totalAbierto"
   /** Un bucket de classifyEstado, pero TODAS las fechas (no acotado al período) — la contraparte de "estado" para "Estado actual de la operación". */
-  | "estadoActual";
+  | "estadoActual"
+  /** "Distribución por responsable" (backlog): mismo universo que totalAbierto, filtrado por responsable. Ver getOpenRequestsByResponsibleArea. */
+  | "responsableAbierto"
+  /** Los 4 rangos EXCLUYENTES de antigüedad del backlog — ver getBacklogAgeBuckets. */
+  | "backlogDays0to5"
+  | "backlogDays6to15"
+  | "backlogDays16to30"
+  | "backlogDaysOver30"
+  | "backlogSinFecha"
+  /** "Cumplimiento de compromisos" — ver getComplianceSummary. */
+  | "vencidas"
+  | "proximasAVencer"
+  | "cumplidas";
 
 export interface GetIndicatorRequestsParams {
   indicator: IndicatorKind;
@@ -417,15 +628,16 @@ export interface GetIndicatorRequestsParams {
    * Mes del período (1-12). Si se omite, el período es el AÑO CALENDARIO
    * COMPLETO de `year` (modo "Año actual" de /indicadores — ver
    * getYearPeriodRange). Ignorado por los indicadores independientes del
-   * período ("totalAbierto", "estadoActual" y los backlogOver7/15/30, que
-   * siempre son relativos a la fecha actual del sistema).
+   * período ("totalAbierto", "estadoActual", "responsableAbierto", los 4
+   * backlogDays*, y vencidas/proximasAVencer/cumplidas, que siempre son
+   * relativos a la fecha actual del sistema).
    */
   month?: number;
   /** Requerido cuando indicator === "estado" o "estadoActual" (pendiente/espera/programada/atendida/otro). */
   bucket?: EstadoBucket;
   /** Requerido cuando indicator === "maquina": valor exacto de MAQUINA. */
   maquina?: string;
-  /** Requerido cuando indicator === "responsable": "MANTENIMIENTO" | "PRODUCCION" | RESPONSIBLE_AREA_UNDEFINED_VALUE. */
+  /** Requerido cuando indicator === "responsableAbierto": "MANTENIMIENTO" | "PRODUCCION" | RESPONSIBLE_AREA_UNDEFINED_VALUE. */
   responsable?: string;
   /** indicator === "operario" con CODEMPLE disponible: valor exacto de CODEMPLE (identificador estable). */
   codemple?: string;
@@ -451,6 +663,7 @@ export interface IndicatorRequestRow {
   empleado: string | null;
   /** Nombres de técnicos con asignación activa (removedAt = null), si los hay. */
   technicianNames: string[];
+  commitmentDate: Date | null;
 }
 
 export interface IndicatorRequestsPage {
@@ -473,6 +686,7 @@ const INDICATOR_REQUEST_SELECT = {
   responsibleArea: true,
   codemple: true,
   empleado: true,
+  commitmentDate: true,
   assignedTechnicians: {
     where: { removedAt: null },
     select: { technician: { select: { fullName: true } } },
@@ -496,6 +710,7 @@ function toIndicatorRequestRow(row: RawIndicatorRequestRow): IndicatorRequestRow
     codemple: row.codemple,
     empleado: row.empleado,
     technicianNames: row.assignedTechnicians.map((assignment) => assignment.technician.fullName),
+    commitmentDate: row.commitmentDate,
   };
 }
 
@@ -516,6 +731,32 @@ async function findIndicatorPage(
     db.maintenanceRequest.count({ where }),
   ]);
   return { items: rows.map(toIndicatorRequestRow), total };
+}
+
+/**
+ * Página de detalle para un indicador cuyo universo ya viene como una lista
+ * de ids preseleccionada en memoria (cerradas/vencidas/próximas a
+ * vencer/cumplidas) en vez de un WHERE de Prisma directo — se preserva el
+ * orden de `ids`, no el orden de la consulta de `findMany`.
+ */
+async function findIndicatorPageByIds(
+  ids: string[],
+  take: number,
+  skip: number,
+): Promise<IndicatorRequestsPage> {
+  const total = ids.length;
+  const pageIds = ids.slice(skip, skip + take);
+  if (pageIds.length === 0) return { items: [], total };
+  const rows = await db.maintenanceRequest.findMany({
+    where: { id: { in: pageIds } },
+    select: INDICATOR_REQUEST_SELECT,
+  });
+  const rowById = new Map(rows.map((row) => [row.id, row]));
+  const items = pageIds
+    .map((id) => rowById.get(id))
+    .filter((row): row is RawIndicatorRequestRow => Boolean(row))
+    .map(toIndicatorRequestRow);
+  return { items, total };
 }
 
 /**
@@ -606,35 +847,33 @@ export async function getIndicatorRequests(
 
     case "cerradas": {
       const ids = await getClosedRequestIdsForPeriod(start, end);
-      const total = ids.length;
-      const pageIds = ids.slice(skip, skip + take);
-      if (pageIds.length === 0) return { items: [], total };
-      const rows = await db.maintenanceRequest.findMany({
-        where: { id: { in: pageIds } },
-        select: INDICATOR_REQUEST_SELECT,
-      });
-      const rowById = new Map(rows.map((row) => [row.id, row]));
-      // Se preserva el orden de `pageIds` (cierre más reciente primero), no el orden de la consulta.
-      const items = pageIds
-        .map((id) => rowById.get(id))
-        .filter((row): row is RawIndicatorRequestRow => Boolean(row))
-        .map(toIndicatorRequestRow);
-      return { items, total };
+      return findIndicatorPageByIds(ids, take, skip);
     }
 
-    case "backlog": {
+    case "backlogDays0to5":
+    case "backlogDays6to15":
+    case "backlogDays16to30":
+    case "backlogDaysOver30":
+    case "backlogSinFecha": {
+      const BUCKET_BY_INDICATOR: Record<
+        "backlogDays0to5" | "backlogDays6to15" | "backlogDays16to30" | "backlogDaysOver30" | "backlogSinFecha",
+        BacklogAgeBucketKind
+      > = {
+        backlogDays0to5: "days0to5",
+        backlogDays6to15: "days6to15",
+        backlogDays16to30: "days16to30",
+        backlogDaysOver30: "daysOver30",
+        backlogSinFecha: "sinFecha",
+      };
+      const bucket = BUCKET_BY_INDICATOR[indicator];
       const estadoWhere = await getNonAtendidaEstadoWhere();
-      // Más antiguas primero — mismo criterio que listBacklogMaintenanceRequests (Dashboard).
-      return findIndicatorPage({ fecha: { lt: start }, ...estadoWhere }, take, skip, "asc");
-    }
-
-    case "backlogOver7":
-    case "backlogOver15":
-    case "backlogOver30": {
-      const days = indicator === "backlogOver7" ? 7 : indicator === "backlogOver15" ? 15 : 30;
-      const estadoWhere = await getNonAtendidaEstadoWhere();
-      const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-      return findIndicatorPage({ fecha: { lt: cutoff }, ...estadoWhere }, take, skip, "asc");
+      // Más antiguas primero — mismo criterio que antes usaba el backlog por período.
+      return findIndicatorPage(
+        { AND: [estadoWhere, getBacklogAgeBucketWhere(bucket)] },
+        take,
+        skip,
+        "asc",
+      );
     }
 
     case "maquina": {
@@ -642,14 +881,19 @@ export async function getIndicatorRequests(
       return findIndicatorPage({ ...periodWhere, maquina }, take, skip);
     }
 
-    case "responsable": {
+    case "responsableAbierto": {
+      // Mismo universo que "totalAbierto" (ESTADO != Realizado, sin filtro
+      // de FECHA), filtrado por responsable — la contraparte backlog de
+      // "responsable" (que sigue acotado al período). Ver
+      // getOpenRequestsByResponsibleArea, misma definición.
+      const estadoWhere = await getNonAtendidaEstadoWhere();
       const responsableWhere: Prisma.MaintenanceRequestWhereInput =
         responsable === RESPONSIBLE_AREA_UNDEFINED_VALUE
           ? { responsibleArea: null }
           : responsable === "MANTENIMIENTO" || responsable === "PRODUCCION"
             ? { responsibleArea: responsable }
             : {};
-      return findIndicatorPage({ ...periodWhere, ...responsableWhere }, take, skip);
+      return findIndicatorPage({ AND: [estadoWhere, responsableWhere] }, take, skip);
     }
 
     case "operario": {
@@ -672,6 +916,21 @@ export async function getIndicatorRequests(
       // espera/Programadas de "Estado actual de la operación").
       const estadoWhere = await getEstadoWhereForBucket(bucket);
       return findIndicatorPage(estadoWhere, take, skip);
+    }
+
+    case "vencidas": {
+      const ids = await getVencidasRequestIds();
+      return findIndicatorPageByIds(ids, take, skip);
+    }
+
+    case "proximasAVencer": {
+      const ids = await getProximasAVencerRequestIds();
+      return findIndicatorPageByIds(ids, take, skip);
+    }
+
+    case "cumplidas": {
+      const { cumplidaIds } = await getComplianceBreakdown();
+      return findIndicatorPageByIds(cumplidaIds, take, skip);
     }
 
     default: {
