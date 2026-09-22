@@ -22,6 +22,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { openBucketCountsToDashboardStats } from "@/lib/estado";
 import { formatPeriodLabel, getPeriodRange, type Period } from "@/lib/period";
 import {
   getAvailableYears,
@@ -137,6 +138,15 @@ export default async function IndicadoresPage({
     stats,
     closedTasks,
   };
+
+  // "Distribución por estado": sin un mes específico seleccionado (modo "Año
+  // actual", ver isYearMode) representa la situación ACTUAL de las
+  // solicitudes abiertas (ESTADO != Realizado, sin filtro de FECHA — mismo
+  // universo que "Estado actual de la operación"/"Backlog"), nunca el
+  // volumen del año completo. Con un mes específico seleccionado (incluido
+  // el default "Mes actual"), sigue siendo la distribución del período —
+  // comportamiento sin cambios.
+  const estadoDistributionStats = isYearMode ? openBucketCountsToDashboardStats(openCounts) : stats;
 
   const isEmpty = stats.total === 0;
   const currentIndicadoresHref = isYearMode
@@ -261,7 +271,7 @@ export default async function IndicadoresPage({
                   <CardDescription>Proporción real sobre las solicitudes del período.</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <EstadoDistribution stats={stats} />
+                  <EstadoDistribution stats={estadoDistributionStats} />
                 </CardContent>
               </Card>
             </div>

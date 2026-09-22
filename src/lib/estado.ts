@@ -92,6 +92,35 @@ export interface DashboardStats {
   otros: number;
 }
 
+/**
+ * Adapta OpenBucketCounts (solicitudes ABIERTAS, ESTADO != Realizado, SIN
+ * filtro de FECHA — ver getOpenBucketCounts en maintenance-requests.service.ts)
+ * al shape de DashboardStats, para reutilizar EstadoDistribution en la vista
+ * "situación actual" de /indicadores en vez de la vista por período.
+ * `atendidas` siempre es 0: por definición ninguna solicitud Realizado
+ * pertenece al universo de abiertas, así que esa barra nunca debe aparecer
+ * acá (a diferencia de la vista por período, donde si aparece).
+ * Se define acá (no en maintenance-requests.service.ts) por el mismo motivo
+ * que getBucketStatValue: es pura, sin dependencia de Prisma/pg, y la
+ * consume un componente cliente.
+ */
+export function openBucketCountsToDashboardStats(counts: {
+  totalAbiertas: number;
+  pendientes: number;
+  espera: number;
+  programadas: number;
+  otros: number;
+}): DashboardStats {
+  return {
+    total: counts.totalAbiertas,
+    pendientes: counts.pendientes,
+    espera: counts.espera,
+    programadas: counts.programadas,
+    atendidas: 0,
+    otros: counts.otros,
+  };
+}
+
 const BUCKET_STATS_KEY: Record<EstadoBucket, keyof Omit<DashboardStats, "total">> = {
   pendiente: "pendientes",
   espera: "espera",
