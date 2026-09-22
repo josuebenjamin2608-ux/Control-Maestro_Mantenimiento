@@ -32,6 +32,46 @@ export type SolicitudesExportFilters = Pick<
   "search" | "maquina" | "estado" | "responsable"
 >;
 
+interface ExportRelatedLog {
+  fechaini: Date | null;
+  fechafin: Date | null;
+  observaciones: string | null;
+}
+
+/** dd/mm/yyyy en hora LOCAL — FECHAINI/FECHAFIN de Minuta representan un instante real, nunca se formatean en UTC (ver src/lib/dates.ts). Mismo criterio que MinutaTimeline, en formato numérico. */
+function formatLogDateDDMMYYYY(date: Date): string {
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  return `${day}/${month}/${date.getFullYear()}`;
+}
+
+/**
+ * Consolida en una sola celda las OBSERVACIONES de las Minutas relacionadas
+ * con una Solicitud (`request.logs`, ya filtrada por la FK existente —
+ * nunca una PENDING/UNRELATED, ver comentario en
+ * listMaintenanceRequestsForExport). Nunca una fila por Minuta: 1 Solicitud
+ * = 1 fila del Excel, siempre. Minutas relacionadas sin texto en
+ * OBSERVACIONES se omiten (no aportan nada); si no queda ninguna con texto,
+ * la celda queda vacía (`null`) — nunca se inventa contenido a partir de
+ * PROBLEMA, TAREA ni ningún otro campo.
+ */
+function buildConsolidatedObservaciones(logs: ExportRelatedLog[]): string | null {
+  const withText = logs.filter(
+    (log) => log.observaciones !== null && log.observaciones.trim().length > 0,
+  );
+  if (withText.length === 0) return null;
+
+  // Cronológico: los logs ya llegan ordenados por fechaini "asc" (ver
+  // listMaintenanceRequestsForExport) — nunca se reordenan acá por fechafin.
+  return withText
+    .map((log) => {
+      const date = log.fechafin ?? log.fechaini;
+      const text = log.observaciones as string;
+      return date ? `${formatLogDateDDMMYYYY(date)} - ${text.trim()}` : text.trim();
+    })
+    .join("\n");
+}
+
 /**
  * Genera el Excel de "Detalle de Solicitudes" para /solicitudes.
  *
@@ -44,8 +84,10 @@ export type SolicitudesExportFilters = Pick<
  *   ya usada por "Cerradas"/"Cumplimiento de compromisos" — el FECHAFIN más
  *   reciente entre las Minutas RELATED de esa solicitud. Sin Minuta
  *   relacionada con FECHAFIN, el campo queda vacío (nunca se inventa).
- * - "OBSERVACIONES": siempre vacío — no se deriva de PROBLEMA, TAREA ni
- *   ningún otro campo.
+ * - "OBSERVACIONES": consolidada desde las Minutas relacionadas (ver
+ *   buildConsolidatedObservaciones) — NUNCA desde PROBLEMA, TAREA ni
+ *   Telegram. 1 Solicitud siempre produce 1 fila, sin importar cuántas
+ *   Minutas relacionadas tenga.
  */
 export async function buildSolicitudesExportWorkbook(
   filters: SolicitudesExportFilters = {},
@@ -92,13 +134,17 @@ export async function buildSolicitudesExportWorkbook(
       // FECHAFIN más reciente entre Minutas RELATED de esta solicitud; null si no hay ninguna.
       fechaAtencion: fechafinByRequest.get(request.id) ?? null,
       fechaCompromiso: request.commitmentDate,
-      observaciones: null,
+      observaciones: buildConsolidatedObservaciones(request.logs),
     });
   }
 
   for (const key of ["fecha", "fechaAtencion", "fechaCompromiso"] as const) {
     worksheet.getColumn(key).numFmt = DATE_NUM_FMT;
   }
+  // Varias observaciones consolidadas con salto de línea (ver
+  // buildConsolidatedObservaciones): wrapText para que se vean como líneas
+  // separadas al abrir el archivo, no como un solo renglón cortado.
+  worksheet.getColumn("observaciones").alignment = { wrapText: true, vertical: "top" };
 
   worksheet.autoFilter = {
     from: { row: 1, column: 1 },

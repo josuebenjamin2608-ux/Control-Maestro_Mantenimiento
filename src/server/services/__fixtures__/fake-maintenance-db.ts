@@ -100,12 +100,24 @@ function compareForSort(a: unknown, b: unknown): number {
   return 0;
 }
 
+interface IncludeSpec {
+  logs?: { orderBy?: Record<string, "asc" | "desc"> } | boolean;
+  assignedTechnicians?: unknown;
+  _count?: { select?: Record<string, boolean> };
+}
+
 interface FindManyArgs {
   where?: WhereInput;
   distinct?: string[];
   orderBy?: Record<string, "asc" | "desc">;
   take?: number;
   skip?: number;
+  include?: IncludeSpec;
+}
+
+interface FindUniqueArgs {
+  where: Record<string, unknown>;
+  include?: IncludeSpec;
 }
 
 interface CountArgs {
@@ -117,8 +129,51 @@ interface GroupByArgs {
   where?: WhereInput;
 }
 
-function findMany(rows: FakeRow[], args: FindManyArgs = {}): FakeRow[] {
-  const { where, distinct, orderBy, take, skip } = args;
+/**
+ * Resuelve `include` contra `state`, imitando el único caso real que usa
+ * este código: `MaintenanceRequest.logs` (reverso de la FK
+ * `MaintenanceLog.maintenanceRequestId`) y `.assignedTechnicians`. Como en
+ * Prisma real, `logs` solo puede contener Minutas cuyo `maintenanceRequestId`
+ * apunta a esta solicitud — que, por cómo las arma
+ * maintenance-log-import.service.ts, son exactamente las RELATED (ver
+ * makeLogRow/comentario ahí) — nunca una PENDING/UNRELATED, sin necesidad de
+ * filtrar `relationStatus` acá aparte.
+ */
+function resolveIncludes(row: FakeRow, state: FakeDbState, include: IncludeSpec | undefined): FakeRow {
+  if (!include) return row;
+  const result = { ...row };
+
+  if (include.logs) {
+    let relatedLogs = state.logs.filter((log) => log.maintenanceRequestId === row.id);
+    const orderBy = typeof include.logs === "object" ? include.logs.orderBy : undefined;
+    if (orderBy) {
+      const [field, direction] = Object.entries(orderBy)[0] as [string, "asc" | "desc"];
+      relatedLogs = [...relatedLogs].sort((a, b) => {
+        const cmp = compareForSort(a[field], b[field]);
+        return direction === "desc" ? -cmp : cmp;
+      });
+    }
+    result.logs = relatedLogs.map((log) => ({ ...log }));
+  }
+
+  if (include.assignedTechnicians) {
+    result.assignedTechnicians = (row.assignedTechnicians as FakeRow[] | undefined) ?? [];
+  }
+
+  if (include._count) {
+    const select = include._count.select ?? {};
+    const counts: Record<string, number> = {};
+    if (select.logs) {
+      counts.logs = state.logs.filter((log) => log.maintenanceRequestId === row.id).length;
+    }
+    result._count = counts;
+  }
+
+  return result;
+}
+
+function findMany(state: FakeDbState, rows: FakeRow[], args: FindManyArgs = {}): FakeRow[] {
+  const { where, distinct, orderBy, take, skip, include } = args;
   let result = rows.filter((row) => matchWhere(row, where));
 
   if (distinct && distinct.length > 0) {
@@ -142,7 +197,14 @@ function findMany(rows: FakeRow[], args: FindManyArgs = {}): FakeRow[] {
   if (skip !== undefined) result = result.slice(skip);
   if (take !== undefined) result = result.slice(0, take);
 
-  return result.map((row) => ({ ...row }));
+  return result.map((row) => resolveIncludes({ ...row }, state, include));
+}
+
+function findUnique(state: FakeDbState, rows: FakeRow[], args: FindUniqueArgs): FakeRow | null {
+  const { where, include } = args;
+  const row = rows.find((candidate) => matchWhere(candidate, where));
+  if (!row) return null;
+  return resolveIncludes({ ...row }, state, include);
 }
 
 function count(rows: FakeRow[], args: CountArgs = {}): number {
@@ -180,12 +242,13 @@ export interface FakeDbState {
 export function createFakeDb(state: FakeDbState) {
   return {
     maintenanceRequest: {
-      findMany: (args?: FindManyArgs) => Promise.resolve(findMany(state.requests, args)),
+      findMany: (args?: FindManyArgs) => Promise.resolve(findMany(state, state.requests, args)),
+      findUnique: (args: FindUniqueArgs) => Promise.resolve(findUnique(state, state.requests, args)),
       count: (args?: CountArgs) => Promise.resolve(count(state.requests, args)),
       groupBy: (args: GroupByArgs) => Promise.resolve(groupBy(state.requests, args)),
     },
     maintenanceLog: {
-      findMany: (args?: FindManyArgs) => Promise.resolve(findMany(state.logs, args)),
+      findMany: (args?: FindManyArgs) => Promise.resolve(findMany(state, state.logs, args)),
     },
   };
 }
@@ -211,13 +274,15 @@ export function makeRequestRow(overrides: Partial<FakeRow> & { id: string }): Fa
   };
 }
 
-/** Fila mínima de MaintenanceLog — solo los campos que getLatestFechafinByRequest realmente lee. */
+/** Fila mínima de MaintenanceLog — los campos que getLatestFechafinByRequest/getMaintenanceRequestByParte realmente leen. */
 export function makeLogRow(overrides: Partial<FakeRow> & { id: string }): FakeRow {
   return {
     registro: overrides.id,
     relationStatus: "RELATED",
     maintenanceRequestId: null,
+    fechaini: null,
     fechafin: null,
+    observaciones: null,
     ...overrides,
   };
 }

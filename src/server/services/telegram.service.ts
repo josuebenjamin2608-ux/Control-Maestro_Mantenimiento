@@ -31,6 +31,18 @@ const TELEGRAM_API_TIMEOUT_MS = 10_000;
 /** Telegram exige que el token del bot tenga esta forma: <bot_id>:<hash>. */
 const BOT_TOKEN_PATTERN = /^\d+:[A-Za-z0-9_-]+$/;
 
+interface TelegramInlineKeyboardButton {
+  text: string;
+  /** Botón de acción (dispara un callback_query que procesa el webhook) — nunca una URL. */
+  callback_data?: string;
+  /** Botón de enlace externo (abre el navegador) — nunca dispara callback_query. */
+  url?: string;
+}
+
+export interface TelegramInlineKeyboardMarkup {
+  inline_keyboard: TelegramInlineKeyboardButton[][];
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -190,6 +202,128 @@ function buildTechnicianAssignedText(request: MaintenanceRequest, technicianName
   return lines.join("\n");
 }
 
+/**
+ * Menú interactivo debajo del mensaje de asignación (grupo y chat privado):
+ * "Ver solicitud"/"Ver observaciones" son botones de ACCIÓN (callback_data
+ * "req:<parte>"/"obs:<parte>", procesados por el webhook — ver
+ * handleTelegramCallbackQuery en route.ts), nunca botones de "iniciar
+ * atención"/"finalizar atención"/etc.: esa información sigue siendo
+ * exclusiva de las Minutas, Telegram nunca la escribe. "Ver solicitud en
+ * SIMI" se conserva como botón de enlace además de la línea de texto ya
+ * existente en el mensaje — mismo destino, ninguna funcionalidad quitada.
+ * `parte` va crudo (con ceros a la izquierda) en el callback_data, igual
+ * criterio que buildSolicitudLink: es el valor real de columna, nunca el
+ * formateado para mostrar.
+ */
+function buildTechnicianAssignedKeyboard(parte: string): TelegramInlineKeyboardMarkup {
+  const rows: TelegramInlineKeyboardButton[][] = [
+    [
+      { text: "📋 Ver solicitud", callback_data: `req:${parte}` },
+      { text: "📝 Ver observaciones", callback_data: `obs:${parte}` },
+    ],
+  ];
+
+  const link = buildSolicitudLink(parte);
+  if (link) {
+    rows.push([{ text: "🔗 Ver solicitud en SIMI", url: link }]);
+  }
+
+  return { inline_keyboard: rows };
+}
+
+const MINUTA_DATE_FORMATTER = new Intl.DateTimeFormat("es", { dateStyle: "medium" });
+
+interface RelatedMinutaLog {
+  fechaini: Date | null;
+  fechafin: Date | null;
+  observaciones: string | null;
+}
+
+interface SolicitudSummaryRequest {
+  parte: string;
+  maquina: string | null;
+  problema: string | null;
+  tarea: string | null;
+  estado: string | null;
+  fecha: Date | null;
+  responsibleArea: MaintenanceRequest["responsibleArea"];
+  commitmentDate: Date | null;
+  assignedTechnicians: { removedAt: Date | null; technician: { fullName: string } }[];
+}
+
+/**
+ * Texto del botón "📋 Ver solicitud": consulta EN VIVO (no reusa el texto
+ * del mensaje de asignación, que puede quedar desactualizado) la
+ * información principal de la Solicitud — misma fuente que la ficha
+ * /solicitudes/[parte] (ver getMaintenanceRequestByParte). Solo lectura.
+ */
+export function buildSolicitudQueryText(request: SolicitudSummaryRequest): string {
+  const parteDisplay = formatParteDisplay(request.parte);
+  const activeTechnicianNames = request.assignedTechnicians
+    .filter((assignment) => assignment.removedAt === null)
+    .map((assignment) => assignment.technician.fullName);
+
+  const lines = [
+    `📋 <b>SOLICITUD ${escapeHtml(parteDisplay)}</b>`,
+    "",
+    `<b>Máquina:</b> ${displayOrDash(request.maquina)}`,
+    `<b>Problema:</b> ${displayOrDash(request.problema)}`,
+    `<b>Tarea:</b> ${displayOrDash(request.tarea)}`,
+    `<b>Estado:</b> ${displayOrDash(request.estado)}`,
+    `<b>Fecha:</b> ${escapeHtml(formatCalendarDate(request.fecha))}`,
+    `<b>Área responsable:</b> ${escapeHtml(formatResponsibleArea(request.responsibleArea))}`,
+    `<b>Técnico(s) asignado(s):</b> ${
+      activeTechnicianNames.length > 0 ? escapeHtml(activeTechnicianNames.join(", ")) : "Sin asignar"
+    }`,
+  ];
+
+  if (request.commitmentDate) {
+    lines.push(`<b>Fecha compromiso:</b> ${escapeHtml(formatCalendarDate(request.commitmentDate))}`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Texto del botón "📝 Ver observaciones": CONSULTA de solo lectura de las
+ * Minutas ya relacionadas con esta Solicitud (relación existente PARTE <->
+ * OBSERVACIONES.trim(), materializada como MaintenanceLog.maintenanceRequestId
+ * — ver comentario en maintenance-log-import.service.ts; nunca se recalcula
+ * acá). `logs` DEBE venir ya filtrada a esa relación (p. ej.
+ * MaintenanceRequest.logs, que por esa misma FK nunca incluye una Minuta
+ * PENDING/UNRELATED) — esta función nunca decide qué está relacionado.
+ * Minutas relacionadas sin texto en OBSERVACIONES se omiten (no aportan
+ * nada que mostrar); si no queda ninguna con texto, se muestra el aviso
+ * exacto pedido. Nunca crea ni modifica ninguna Minuta ni Solicitud.
+ */
+export function buildObservacionesQueryText(parte: string, logs: RelatedMinutaLog[]): string {
+  const parteDisplay = formatParteDisplay(parte);
+  const title = `📝 <b>OBSERVACIONES — SOLICITUD ${escapeHtml(parteDisplay)}</b>`;
+
+  const withText = logs.filter(
+    (log) => log.observaciones !== null && log.observaciones.trim().length > 0,
+  );
+
+  if (withText.length === 0) {
+    return [title, "", "ℹ️ No hay observaciones registradas para esta solicitud."].join("\n");
+  }
+
+  // Cronológico — mismo orden que ya usa la ficha de la solicitud (ver
+  // MinutaTimeline, orderBy fechaini "asc"); nunca se reordena por fechafin.
+  const entries = withText.map((log) => {
+    const date = log.fechafin ?? log.fechaini;
+    const dateLabel = date ? MINUTA_DATE_FORMATTER.format(date) : "Sin fecha";
+    return `${escapeHtml(dateLabel)} - ${escapeHtml((log.observaciones as string).trim())}`;
+  });
+
+  return [title, "", ...entries].join("\n");
+}
+
+/** Respuesta del webhook cuando el callback_query trae un PARTE que ya no existe (defensivo; hoy no hay borrado de Solicitudes). */
+export function buildSolicitudNotFoundText(parte: string): string {
+  return `❌ No se encontró la solicitud PARTE ${escapeHtml(formatParteDisplay(parte))}.`;
+}
+
 /** Respuesta del webhook cuando el código de vinculación se procesó con éxito. */
 function buildTelegramLinkSuccessText(technicianName: string): string {
   return [
@@ -216,12 +350,15 @@ function parteLogSuffix(parte: string | null): string {
 }
 
 /**
- * Infraestructura de envío compartida por todos los eventos de Telegram —
+ * POST genérico a un método de la API de Telegram (bot<token>/<method>) —
+ * infraestructura de envío compartida por todos los eventos de Telegram,
  * tanto al grupo de Mantenimiento como al chat privado de un técnico
- * vinculado o al remitente de un update entrante (webhook). Nunca lanza:
- * un fallo (timeout, red caída, respuesta no-2xx o body.ok=false de la API
- * de Telegram) no debe afectar al llamador, que ya persistió su cambio en
- * PostgreSQL antes de invocar esta función.
+ * vinculado, al remitente de un update entrante (webhook), o a la propia
+ * API para cerrar un callback_query (answerCallbackQuery). Nunca lanza: un
+ * fallo (timeout, red caída, respuesta no-2xx o body.ok=false de la API de
+ * Telegram) no debe afectar al llamador, que ya persistió su cambio en
+ * PostgreSQL (o no tiene ningún cambio que revertir) antes de invocar esta
+ * función.
  *
  * Registra el resultado en los tres casos (éxito, fallo HTTP/API, fallo de
  * red) — un envío exitoso nunca debe quedar indistinguible de una llamada
@@ -230,22 +367,21 @@ function parteLogSuffix(parte: string | null): string {
  * el mensaje crudo de fetch, nunca el body completo de la respuesta de
  * Telegram (solo error_code/description ya truncados cuando aplica).
  *
- * `token`/`chatId` ya deben venir validados por el llamador (validateTelegramConfig
- * o validateBotTokenOnly) — esta función nunca lee variables de entorno.
- * `eventName` es solo para los mensajes de log — nunca decide el contenido
- * del mensaje enviado a Telegram, que ya llega armado en `text`. `parte` es
- * `null` únicamente cuando el envío no está asociado a una Solicitud (p. ej.
- * la respuesta del webhook de vinculación) — en ese caso se omite el sufijo
- * "para PARTE X" del log.
+ * `token` ya debe venir validado por el llamador (validateTelegramConfig o
+ * validateBotTokenOnly) — esta función nunca lee variables de entorno.
+ * `logLabel` es solo para los mensajes de log — nunca decide el contenido
+ * de `body`. `parte` es `null` únicamente cuando la llamada no está
+ * asociada a una Solicitud — en ese caso se omite el sufijo "para PARTE X"
+ * del log.
  */
-async function dispatchTelegramMessage(
+async function callTelegramApi(
   token: string,
-  chatId: string,
-  text: string,
-  eventName: string,
+  method: string,
+  body: Record<string, unknown>,
+  logLabel: string,
   parte: string | null,
 ): Promise<void> {
-  const apiUrl = `https://api.telegram.org/bot${token}/sendMessage`;
+  const apiUrl = `https://api.telegram.org/bot${token}/${method}`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), TELEGRAM_API_TIMEOUT_MS);
 
@@ -253,12 +389,7 @@ async function dispatchTelegramMessage(
     const response = await fetch(apiUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        parse_mode: "HTML",
-        disable_web_page_preview: true,
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
 
@@ -266,30 +397,60 @@ async function dispatchTelegramMessage(
     // "ok" con el status HTTP, pero no está garantizado — se valida cada
     // uno por separado en vez de asumir que uno implica el otro. Nunca se
     // loggea el body completo, solo error_code/description ya saneados.
-    const body = await parseTelegramResponseBody(response);
+    const parsed = await parseTelegramResponseBody(response);
 
     if (!response.ok) {
       console.error(
         `[telegram] La API de Telegram respondió HTTP ${response.status}${parteLogSuffix(parte)}` +
-          (body?.error_code !== undefined ? ` (error_code ${body.error_code})` : "") +
-          `: ${sanitizeTelegramDescription(body?.description)}`,
+          (parsed?.error_code !== undefined ? ` (error_code ${parsed.error_code})` : "") +
+          `: ${sanitizeTelegramDescription(parsed?.description)}`,
       );
-    } else if (!body?.ok) {
+    } else if (!parsed?.ok) {
       console.error(
         `[telegram] La API de Telegram respondió HTTP ${response.status} pero body.ok=false${parteLogSuffix(parte)}` +
-          (body?.error_code !== undefined ? ` (error_code ${body.error_code})` : "") +
-          `: ${sanitizeTelegramDescription(body?.description)}`,
+          (parsed?.error_code !== undefined ? ` (error_code ${parsed.error_code})` : "") +
+          `: ${sanitizeTelegramDescription(parsed?.description)}`,
       );
     } else {
-      console.log(`[telegram] ${eventName} enviado correctamente${parteLogSuffix(parte)}.`);
+      console.log(`[telegram] ${logLabel} enviado correctamente${parteLogSuffix(parte)}.`);
     }
   } catch (error) {
     console.error(
-      `[telegram] No se pudo enviar la notificación de ${eventName}${parteLogSuffix(parte)}: ${classifyFetchError(error)}.`,
+      `[telegram] No se pudo enviar la notificación de ${logLabel}${parteLogSuffix(parte)}: ${classifyFetchError(error)}.`,
     );
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+/**
+ * `sendMessage` — misma infraestructura (callTelegramApi) que usa todo el
+ * resto de este archivo. `replyMarkup` es opcional: cuando se omite, el
+ * body queda IDÉNTICO al de siempre (sin campo `reply_markup`) — así los
+ * eventos que no llevan menú (maintenance_request.created, la respuesta del
+ * webhook de vinculación) quedan exactamente igual que antes.
+ */
+async function dispatchTelegramMessage(
+  token: string,
+  chatId: string,
+  text: string,
+  eventName: string,
+  parte: string | null,
+  replyMarkup?: TelegramInlineKeyboardMarkup,
+): Promise<void> {
+  await callTelegramApi(
+    token,
+    "sendMessage",
+    {
+      chat_id: chatId,
+      text,
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    },
+    eventName,
+    parte,
+  );
 }
 
 /**
@@ -344,6 +505,7 @@ export async function sendTechnicianAssignedNotification(
     buildTechnicianAssignedText(request, technicianName),
     "technician_assigned",
     request.parte,
+    buildTechnicianAssignedKeyboard(request.parte),
   );
 }
 
@@ -376,6 +538,7 @@ export async function sendTechnicianAssignedDirectNotification(
     buildTechnicianAssignedText(request, technicianName),
     "technician_assigned_direct",
     request.parte,
+    buildTechnicianAssignedKeyboard(request.parte),
   );
 }
 
@@ -395,6 +558,32 @@ export async function sendTelegramWebhookReply(chatId: string, text: string): Pr
     return;
   }
   await dispatchTelegramMessage(config.token, chatId, text, "telegram_link_webhook_reply", null);
+}
+
+/**
+ * `answerCallbackQuery` — Telegram exige responder a TODO callback_query
+ * (botón inline presionado) para que el cliente deje de mostrar el ícono de
+ * carga sobre el botón, sin importar si se pudo enviar o no una respuesta
+ * de contenido (ver handleTelegramCallbackQuery en route.ts, que llama a
+ * esta función siempre, en paralelo con sendTelegramWebhookReply). Nunca
+ * lanza, mismo contrato que el resto de las funciones de envío de este
+ * archivo. No lleva `text`/`show_alert`: la respuesta de contenido va como
+ * un mensaje nuevo al chat (sendTelegramWebhookReply), no como el popup
+ * corto de answerCallbackQuery, para no truncar observaciones largas.
+ */
+export async function answerTelegramCallbackQuery(callbackQueryId: string): Promise<void> {
+  const config = validateBotTokenOnly();
+  if (!config.ok) {
+    console.warn(`[telegram] ${config.reason}; no se pudo responder al callback_query.`);
+    return;
+  }
+  await callTelegramApi(
+    config.token,
+    "answerCallbackQuery",
+    { callback_query_id: callbackQueryId },
+    "callback_query_ack",
+    null,
+  );
 }
 
 export {

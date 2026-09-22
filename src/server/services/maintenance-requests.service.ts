@@ -98,12 +98,21 @@ export async function listMaintenanceRequests(params: ListMaintenanceRequestsPar
  * buildMaintenanceRequestWhere), pero SIN paginar: trae todas las
  * solicitudes que cumplen el filtro, para la exportación a Excel de
  * /solicitudes — nunca solo la página actualmente visible en la tabla.
+ * `logs` va incluida (mismo criterio `orderBy: {fechaini: "asc"}` que
+ * getMaintenanceRequestByParte) para la columna OBSERVACIONES del Excel:
+ * por la FK maintenanceRequestId, esta relación nunca trae una Minuta
+ * PENDING/UNRELATED (ver maintenance-log-import.service.ts) — no es una
+ * relación nueva, es la misma que ya usa la ficha de la Solicitud.
  */
 export function listMaintenanceRequestsForExport(
   params: Pick<ListMaintenanceRequestsParams, "search" | "maquina" | "estado" | "responsable"> = {},
 ) {
   const where = buildMaintenanceRequestWhere(params);
-  return db.maintenanceRequest.findMany({ where, orderBy: { fecha: "desc" } });
+  return db.maintenanceRequest.findMany({
+    where,
+    orderBy: { fecha: "desc" },
+    include: { logs: { orderBy: { fechaini: "asc" } } },
+  });
 }
 
 /** Valores reales de MAQUINA presentes en las solicitudes, para el filtro. */

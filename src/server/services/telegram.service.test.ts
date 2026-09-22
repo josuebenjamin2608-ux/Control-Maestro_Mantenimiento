@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MaintenanceRequest } from "@/generated/prisma/client";
 import {
+  answerTelegramCallbackQuery,
+  buildObservacionesQueryText,
+  buildSolicitudNotFoundText,
+  buildSolicitudQueryText,
   buildTelegramLinkChatAlreadyLinkedText,
   buildTelegramLinkInvalidCodeText,
   buildTelegramLinkSuccessText,
@@ -296,6 +300,34 @@ describe("sendTechnicianAssignedNotification", () => {
     assertNeverLogged(logSpy, FAKE_TOKEN);
   });
 
+  it("agrega el menú interactivo (reply_markup) con el PARTE correcto en el callback_data, sin quitar el mensaje principal", async () => {
+    process.env[TOKEN_KEY] = FAKE_TOKEN;
+    process.env[CHAT_ID_KEY] = FAKE_CHAT_ID;
+    fetchMock.mockResolvedValue(
+      makeFetchResponse({ ok: true, status: 200, body: { ok: true, result: { message_id: 7 } } }),
+    );
+
+    await sendTechnicianAssignedNotification(makeRequest(), "Benjamin Arzuza");
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body);
+    // El mensaje principal sigue exactamente igual (mismo texto de siempre).
+    expect(body.text).toContain("ASIGNACIÓN DE MANTENIMIENTO");
+
+    const rows = body.reply_markup.inline_keyboard as { text: string; callback_data?: string; url?: string }[][];
+    const flatButtons = rows.flat();
+    const verSolicitud = flatButtons.find((b) => b.text === "📋 Ver solicitud");
+    const verObservaciones = flatButtons.find((b) => b.text === "📝 Ver observaciones");
+    const verEnSimi = flatButtons.find((b) => b.text === "🔗 Ver solicitud en SIMI");
+
+    // parte crudo (con ceros a la izquierda), nunca formatParteDisplay — mismo criterio que el enlace.
+    expect(verSolicitud?.callback_data).toBe("req:00002119");
+    expect(verObservaciones?.callback_data).toBe("obs:00002119");
+    // "Ver solicitud en SIMI" se conserva como botón de enlace, sin quitar la línea de texto existente.
+    expect(verEnSimi?.url).toContain("/solicitudes/00002119");
+    expect(body.text).toContain("Ver solicitud en SIMI");
+  });
+
   it("omite en silencio (solo warning) cuando falta configuración de Telegram", async () => {
     delete process.env[TOKEN_KEY];
     process.env[CHAT_ID_KEY] = FAKE_CHAT_ID;
@@ -387,6 +419,21 @@ describe("sendTechnicianAssignedDirectNotification — [11] notificación indivi
 
     expect(logSpy).toHaveBeenCalledTimes(1);
     assertNeverLogged(logSpy, FAKE_TOKEN);
+  });
+
+  it("también lleva el menú interactivo (reply_markup) en el chat privado del técnico", async () => {
+    process.env[TOKEN_KEY] = FAKE_TOKEN;
+    fetchMock.mockResolvedValue(
+      makeFetchResponse({ ok: true, status: 200, body: { ok: true, result: { message_id: 99 } } }),
+    );
+
+    await sendTechnicianAssignedDirectNotification(makeRequest(), "Benjamin Arzuza", FAKE_TECHNICIAN_CHAT_ID);
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body);
+    const flatButtons = (body.reply_markup.inline_keyboard as { text: string; callback_data?: string }[][]).flat();
+    expect(flatButtons.find((b) => b.text === "📋 Ver solicitud")?.callback_data).toBe("req:00002119");
+    expect(flatButtons.find((b) => b.text === "📝 Ver observaciones")?.callback_data).toBe("obs:00002119");
   });
 
   it("omite en silencio (solo warning) si TELEGRAM_BOT_TOKEN no está configurado — nunca requiere TELEGRAM_MAINTENANCE_CHAT_ID", async () => {
@@ -490,5 +537,144 @@ describe("sendTelegramWebhookReply + builders de texto — respuestas del webhoo
     expect(fetchMock).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalledTimes(1);
     assertNeverLogged(warnSpy, FAKE_TOKEN);
+  });
+});
+
+describe("buildSolicitudQueryText / buildObservacionesQueryText / buildSolicitudNotFoundText — funciones puras, solo lectura", () => {
+  const PARTE = "00002150";
+
+  function makeSummaryRequest(overrides: Partial<Parameters<typeof buildSolicitudQueryText>[0]> = {}) {
+    return {
+      parte: PARTE,
+      maquina: "LOCATIVO",
+      problema: "Ruido en motor",
+      tarea: "Revisión general",
+      estado: "Solicitado",
+      fecha: new Date("2026-09-17T00:00:00.000Z"),
+      responsibleArea: "MANTENIMIENTO" as const,
+      commitmentDate: null,
+      assignedTechnicians: [],
+      ...overrides,
+    };
+  }
+
+  it("[2] buildSolicitudQueryText incluye el PARTE correcto y la información principal de la solicitud", () => {
+    const text = buildSolicitudQueryText(makeSummaryRequest());
+
+    expect(text).toContain("SOLICITUD 2150"); // formatParteDisplay: sin ceros a la izquierda
+    expect(text).toContain("LOCATIVO");
+    expect(text).toContain("Ruido en motor");
+    expect(text).toContain("Revisión general");
+    expect(text).toContain("Solicitado");
+    expect(text).toContain("Sin asignar"); // sin técnicos activos
+  });
+
+  it("muestra el/los técnico(s) con asignación ACTIVA (removedAt null); omite los retirados", () => {
+    const text = buildSolicitudQueryText(
+      makeSummaryRequest({
+        assignedTechnicians: [
+          { removedAt: null, technician: { fullName: "Benjamin Arzuza" } },
+          { removedAt: new Date(), technician: { fullName: "Técnico Retirado" } },
+        ],
+      }),
+    );
+
+    expect(text).toContain("Benjamin Arzuza");
+    expect(text).not.toContain("Técnico Retirado");
+  });
+
+  it("[3, 4] buildObservacionesQueryText consulta las Minutas relacionadas y muestra las que tienen texto, en el orden recibido (cronológico)", () => {
+    const text = buildObservacionesQueryText(PARTE, [
+      { fechaini: new Date("2026-09-22T00:00:00.000Z"), fechafin: new Date("2026-09-22T00:00:00.000Z"), observaciones: "Se revisa equipo." },
+      { fechaini: new Date("2026-09-23T00:00:00.000Z"), fechafin: new Date("2026-09-23T00:00:00.000Z"), observaciones: "Se solicita repuesto." },
+    ]);
+
+    expect(text).toContain("OBSERVACIONES");
+    expect(text).toContain("Se revisa equipo.");
+    expect(text).toContain("Se solicita repuesto.");
+    expect(text.indexOf("Se revisa equipo.")).toBeLessThan(text.indexOf("Se solicita repuesto."));
+  });
+
+  it("[7] una Solicitud sin Minutas relacionadas muestra el aviso exacto pedido", () => {
+    const text = buildObservacionesQueryText(PARTE, []);
+
+    expect(text).toContain("ℹ️ No hay observaciones registradas para esta solicitud.");
+  });
+
+  it("Minutas relacionadas sin texto en OBSERVACIONES no aportan una entrada vacía", () => {
+    const text = buildObservacionesQueryText(PARTE, [
+      { fechaini: null, fechafin: null, observaciones: null },
+      { fechaini: null, fechafin: null, observaciones: "   " },
+    ]);
+
+    expect(text).toContain("ℹ️ No hay observaciones registradas para esta solicitud.");
+  });
+
+  it("nunca escapa a HTML por accidente (el texto de la Minuta se sanea, no se interpreta)", () => {
+    const text = buildObservacionesQueryText(PARTE, [
+      { fechaini: null, fechafin: new Date("2026-09-22T00:00:00.000Z"), observaciones: "<script>alert(1)</script>" },
+    ]);
+
+    expect(text).not.toContain("<script>");
+    expect(text).toContain("&lt;script&gt;");
+  });
+
+  it("buildSolicitudNotFoundText incluye el PARTE consultado", () => {
+    expect(buildSolicitudNotFoundText("00009999")).toContain("9999");
+  });
+});
+
+describe("answerTelegramCallbackQuery — [8, 9, 10] confirma el callback_query sin escribir nada", () => {
+  const originalToken = process.env[TOKEN_KEY];
+  let fetchMock: ReturnType<typeof vi.fn>;
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    if (originalToken === undefined) delete process.env[TOKEN_KEY];
+    else process.env[TOKEN_KEY] = originalToken;
+    vi.unstubAllGlobals();
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it("llama a answerCallbackQuery con el callback_query_id recibido, sin exigir TELEGRAM_MAINTENANCE_CHAT_ID", async () => {
+    process.env[TOKEN_KEY] = FAKE_TOKEN;
+    fetchMock.mockResolvedValue(makeFetchResponse({ ok: true, status: 200, body: { ok: true } }));
+
+    await answerTelegramCallbackQuery("cbq_123");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [calledUrl, init] = fetchMock.mock.calls[0];
+    expect(calledUrl).toBe(`https://api.telegram.org/bot${FAKE_TOKEN}/answerCallbackQuery`);
+    const body = JSON.parse(init.body);
+    expect(body.callback_query_id).toBe("cbq_123");
+  });
+
+  it("nunca lanza si Telegram falla al confirmar el callback_query", async () => {
+    process.env[TOKEN_KEY] = FAKE_TOKEN;
+    fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+
+    await expect(answerTelegramCallbackQuery("cbq_123")).resolves.toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("omite en silencio (solo warning) si falta TELEGRAM_BOT_TOKEN", async () => {
+    delete process.env[TOKEN_KEY];
+
+    await answerTelegramCallbackQuery("cbq_123");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 });

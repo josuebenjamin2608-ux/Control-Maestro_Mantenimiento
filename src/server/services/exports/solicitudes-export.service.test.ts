@@ -90,16 +90,123 @@ describe("buildSolicitudesExportWorkbook", () => {
     ]);
   });
 
-  it("TEST 4: OBSERVACIONES queda SIEMPRE vacía, incluso si PROBLEMA/TAREA tienen contenido", async () => {
+  it("TEST 4: OBSERVACIONES NUNCA sale de PROBLEMA/TAREA, con o sin Minuta relacionada", async () => {
     state.requests = [
       makeRequestRow({ id: "r1", parte: "00000001", problema: "Fuga de aceite", tarea: "Cambio de sello" }),
+    ];
+    // Sin Minuta relacionada: la celda debe quedar vacía, nunca rellenada con PROBLEMA/TAREA.
+    let buffer = await buildSolicitudesExportWorkbook();
+    let { rows } = await readWorkbook(buffer);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]["OBSERVACIONES"]).toBeFalsy();
+
+    // Con Minuta relacionada: la celda usa el texto de la Minuta, nunca PROBLEMA/TAREA.
+    state.logs = [
+      makeLogRow({ id: "l1", maintenanceRequestId: "r1", relationStatus: "RELATED", observaciones: "Se cambió el sello" }),
+    ];
+    buffer = await buildSolicitudesExportWorkbook();
+    ({ rows } = await readWorkbook(buffer));
+    expect(rows[0]["OBSERVACIONES"]).toBe("Se cambió el sello");
+    expect(rows[0]["OBSERVACIONES"]).not.toContain("Fuga de aceite");
+    expect(rows[0]["OBSERVACIONES"]).not.toContain("Cambio de sello");
+  });
+
+  it("TEST 15: OBSERVACIONES sale de las Minutas relacionadas, con la fecha de la Minuta como prefijo", async () => {
+    state.requests = [makeRequestRow({ id: "r1", parte: "00000001" })];
+    const fechafin = new Date(2026, 8, 22); // 22/09/2026 en hora local, igual criterio que MinutaTimeline
+    state.logs = [
+      makeLogRow({
+        id: "l1",
+        maintenanceRequestId: "r1",
+        relationStatus: "RELATED",
+        fechafin,
+        observaciones: "Se revisa equipo y se identifica desgaste.",
+      }),
     ];
 
     const buffer = await buildSolicitudesExportWorkbook();
     const { rows } = await readWorkbook(buffer);
 
-    expect(rows).toHaveLength(1);
+    expect(rows[0]["OBSERVACIONES"]).toBe("22/09/2026 - Se revisa equipo y se identifica desgaste.");
+  });
+
+  it("TEST 16 y 17: varias Minutas relacionadas NO duplican la fila y sus observaciones se consolidan en una sola celda, en orden cronológico", async () => {
+    state.requests = [makeRequestRow({ id: "r1", parte: "00002150" })];
+    state.logs = [
+      makeLogRow({
+        id: "l1",
+        maintenanceRequestId: "r1",
+        relationStatus: "RELATED",
+        fechaini: new Date(2026, 8, 22),
+        fechafin: new Date(2026, 8, 22),
+        observaciones: "Se revisa equipo y se identifica desgaste.",
+      }),
+      makeLogRow({
+        id: "l2",
+        maintenanceRequestId: "r1",
+        relationStatus: "RELATED",
+        fechaini: new Date(2026, 8, 23),
+        fechafin: new Date(2026, 8, 23),
+        observaciones: "Se solicita repuesto.",
+      }),
+      makeLogRow({
+        id: "l3",
+        maintenanceRequestId: "r1",
+        relationStatus: "RELATED",
+        fechaini: new Date(2026, 8, 24),
+        fechafin: new Date(2026, 8, 24),
+        observaciones: "Se instala repuesto y se realiza prueba.",
+      }),
+    ];
+
+    const buffer = await buildSolicitudesExportWorkbook();
+    const { rows } = await readWorkbook(buffer);
+
+    expect(rows).toHaveLength(1); // 1 Solicitud = 1 fila, nunca 1 fila por Minuta
+    expect(rows[0]["PARTE"]).toBe("00002150");
+    expect(rows[0]["OBSERVACIONES"]).toBe(
+      [
+        "22/09/2026 - Se revisa equipo y se identifica desgaste.",
+        "23/09/2026 - Se solicita repuesto.",
+        "24/09/2026 - Se instala repuesto y se realiza prueba.",
+      ].join("\n"),
+    );
+  });
+
+  it("TEST 18: una Minuta PENDING o UNRELATED nunca aporta a OBSERVACIONES", async () => {
+    state.requests = [makeRequestRow({ id: "r1", parte: "00000001" })];
+    state.logs = [
+      // PENDING/UNRELATED reales nunca tienen maintenanceRequestId seteado
+      // (ver maintenance-log-import.service.ts) — así que ni siquiera
+      // entran en request.logs, la misma garantía estructural que usa el
+      // resto de la app (getMaintenanceRequestByParte).
+      makeLogRow({ id: "l1", maintenanceRequestId: null, relationStatus: "PENDING", observaciones: "No debe aparecer (PENDING)" }),
+      makeLogRow({ id: "l2", maintenanceRequestId: null, relationStatus: "UNRELATED", observaciones: "No debe aparecer (UNRELATED)" }),
+    ];
+
+    const buffer = await buildSolicitudesExportWorkbook();
+    const { rows } = await readWorkbook(buffer);
+
     expect(rows[0]["OBSERVACIONES"]).toBeFalsy();
+  });
+
+  it("observaciones vacías/solo espacios en una Minuta relacionada no generan una línea vacía", async () => {
+    state.requests = [makeRequestRow({ id: "r1", parte: "00000001" })];
+    state.logs = [
+      makeLogRow({ id: "l1", maintenanceRequestId: "r1", relationStatus: "RELATED", observaciones: "   " }),
+      makeLogRow({
+        id: "l2",
+        maintenanceRequestId: "r1",
+        relationStatus: "RELATED",
+        fechafin: new Date(2026, 8, 22),
+        observaciones: "Observación real",
+      }),
+    ];
+
+    const buffer = await buildSolicitudesExportWorkbook();
+    const { rows } = await readWorkbook(buffer);
+
+    expect(rows[0]["OBSERVACIONES"]).toBe("22/09/2026 - Observación real");
   });
 
   it("TEST 5: una solicitud sin Minuta relacionada deja 'Fecha de Atención Evento' vacía", async () => {

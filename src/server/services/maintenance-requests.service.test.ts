@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createFakeDb, daysAgo, makeRequestRow, type FakeDbState } from "./__fixtures__/fake-maintenance-db";
+import { createFakeDb, daysAgo, makeLogRow, makeRequestRow, type FakeDbState } from "./__fixtures__/fake-maintenance-db";
 
 /**
  * getOpenBucketCounts() es el universo real detrás de "Distribución por
@@ -17,7 +17,7 @@ const { state } = vi.hoisted(() => ({
 
 vi.mock("@/lib/db", () => ({ db: createFakeDb(state) }));
 
-const { getOpenBucketCounts } = await import("./maintenance-requests.service");
+const { getOpenBucketCounts, getMaintenanceRequestByParte } = await import("./maintenance-requests.service");
 
 beforeEach(() => {
   state.requests = [];
@@ -87,5 +87,66 @@ describe("getOpenBucketCounts — universo de 'situación actual' (sin filtro de
     expect(counts.totalAbiertas).toBe(5);
     expect(counts.pendientes).toBe(3);
     expect(counts.espera).toBe(2);
+  });
+});
+
+describe("getMaintenanceRequestByParte — relación Solicitud <-> Minutas (PARTE <-> OBSERVACIONES.trim())", () => {
+  it("una Minuta RELATED aparece en .logs", async () => {
+    state.requests = [makeRequestRow({ id: "r1", parte: "00002150" })];
+    state.logs = [makeLogRow({ id: "l1", maintenanceRequestId: "r1", relationStatus: "RELATED" })];
+
+    const request = await getMaintenanceRequestByParte("00002150");
+
+    expect(request?.logs.map((log) => log.id)).toEqual(["l1"]);
+  });
+
+  it("una Minuta PENDING no se considera relacionada: nunca aparece en .logs", async () => {
+    state.requests = [makeRequestRow({ id: "r1", parte: "00002150" })];
+    // PENDING real: OBSERVACIONES coincide con un PARTE, pero maintenanceRequestId
+    // queda null hasta que la relación se confirme (ver maintenance-log-import.service.ts).
+    state.logs = [makeLogRow({ id: "l1", maintenanceRequestId: null, relationStatus: "PENDING" })];
+
+    const request = await getMaintenanceRequestByParte("00002150");
+
+    expect(request?.logs).toEqual([]);
+  });
+
+  it("una Minuta UNRELATED no se considera relacionada: nunca aparece en .logs", async () => {
+    state.requests = [makeRequestRow({ id: "r1", parte: "00002150" })];
+    state.logs = [makeLogRow({ id: "l1", maintenanceRequestId: null, relationStatus: "UNRELATED" })];
+
+    const request = await getMaintenanceRequestByParte("00002150");
+
+    expect(request?.logs).toEqual([]);
+  });
+
+  it("una Solicitud sin Minutas relacionadas devuelve .logs vacío", async () => {
+    state.requests = [makeRequestRow({ id: "r1", parte: "00002150" })];
+    state.logs = [];
+
+    const request = await getMaintenanceRequestByParte("00002150");
+
+    expect(request?.logs).toEqual([]);
+  });
+
+  it("varias Minutas RELATED aparecen en orden cronológico (fechaini asc)", async () => {
+    state.requests = [makeRequestRow({ id: "r1", parte: "00002150" })];
+    state.logs = [
+      makeLogRow({ id: "l3", maintenanceRequestId: "r1", relationStatus: "RELATED", fechaini: daysAgo(1) }),
+      makeLogRow({ id: "l1", maintenanceRequestId: "r1", relationStatus: "RELATED", fechaini: daysAgo(10) }),
+      makeLogRow({ id: "l2", maintenanceRequestId: "r1", relationStatus: "RELATED", fechaini: daysAgo(5) }),
+    ];
+
+    const request = await getMaintenanceRequestByParte("00002150");
+
+    expect(request?.logs.map((log) => log.id)).toEqual(["l1", "l2", "l3"]);
+  });
+
+  it("PARTE inexistente devuelve null, sin lanzar", async () => {
+    state.requests = [];
+
+    const request = await getMaintenanceRequestByParte("no-existe");
+
+    expect(request).toBeNull();
   });
 });

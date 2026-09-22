@@ -15,13 +15,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * TELEGRAM_WEBHOOK_SECRET.
  */
 
-const { consumeMock, sendReplyMock } = vi.hoisted(() => ({
+const { consumeMock, sendReplyMock, answerCallbackMock, getByParteMock } = vi.hoisted(() => ({
   consumeMock: vi.fn(),
   sendReplyMock: vi.fn().mockResolvedValue(undefined),
+  answerCallbackMock: vi.fn().mockResolvedValue(undefined),
+  getByParteMock: vi.fn(),
 }));
 
 vi.mock("@/server/services/technician-telegram-link.service", () => ({
   consumeTechnicianTelegramLinkCode: consumeMock,
+}));
+
+vi.mock("@/server/services/maintenance-requests.service", () => ({
+  getMaintenanceRequestByParte: getByParteMock,
 }));
 
 vi.mock("@/server/services/telegram.service", async (importOriginal) => {
@@ -29,6 +35,7 @@ vi.mock("@/server/services/telegram.service", async (importOriginal) => {
   return {
     ...actual,
     sendTelegramWebhookReply: sendReplyMock,
+    answerTelegramCallbackQuery: answerCallbackMock,
   };
 });
 
@@ -51,6 +58,8 @@ describe("POST /api/telegram/webhook", () => {
   beforeEach(() => {
     consumeMock.mockReset();
     sendReplyMock.mockClear();
+    answerCallbackMock.mockClear();
+    getByParteMock.mockReset();
   });
 
   afterEach(() => {
@@ -183,5 +192,140 @@ describe("POST /api/telegram/webhook", () => {
     const response = await POST(request);
 
     expect(response.status).toBe(200);
+  });
+});
+
+/**
+ * Menú interactivo del mensaje de asignación ("Ver solicitud"/"Ver
+ * observaciones") — SOLO CONSULTA: getMaintenanceRequestByParte queda
+ * mockeado (nunca toca Postgres real acá), pero el route handler real y
+ * los builders de texto reales (buildSolicitudQueryText,
+ * buildObservacionesQueryText) se ejercitan tal cual. Ninguna de estas
+ * pruebas expone un mock de escritura (create/update/delete) sobre
+ * Solicitud o Minuta — no hay ningún camino en el código para que este
+ * handler modifique una, y estas pruebas lo confirman por construcción: si
+ * el handler intentara escribir, no habría ningún mock que lo permitiera.
+ */
+describe("POST /api/telegram/webhook — callback_query del menú interactivo", () => {
+  beforeEach(() => {
+    consumeMock.mockReset();
+    sendReplyMock.mockClear();
+    answerCallbackMock.mockClear();
+    getByParteMock.mockReset();
+  });
+
+  function makeCallbackRequest(data: string, chatId = 555) {
+    return makeRequest({
+      callback_query: { id: "cbq_1", data, message: { chat: { id: chatId, type: "private" } } },
+    });
+  }
+
+  it("[2] 'req:<parte>' consulta exactamente ese PARTE y responde con la información de la solicitud", async () => {
+    getByParteMock.mockResolvedValue({
+      parte: "00002150",
+      maquina: "LOCATIVO",
+      problema: "Ruido",
+      tarea: "Revisión",
+      estado: "Solicitado",
+      fecha: new Date("2026-09-17T00:00:00.000Z"),
+      responsibleArea: "MANTENIMIENTO",
+      commitmentDate: null,
+      assignedTechnicians: [],
+      logs: [],
+    });
+    const request = makeCallbackRequest("req:00002150");
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(getByParteMock).toHaveBeenCalledWith("00002150");
+    expect(answerCallbackMock).toHaveBeenCalledWith("cbq_1");
+    expect(sendReplyMock).toHaveBeenCalledTimes(1);
+    const [chatId, text] = sendReplyMock.mock.calls[0];
+    expect(chatId).toBe("555");
+    expect(text).toContain("SOLICITUD 2150");
+    expect(text).toContain("LOCATIVO");
+  });
+
+  it("[4] 'obs:<parte>' con una Minuta relacionada muestra su observación", async () => {
+    getByParteMock.mockResolvedValue({
+      parte: "00002150",
+      logs: [
+        {
+          fechaini: new Date("2026-09-22T00:00:00.000Z"),
+          fechafin: new Date("2026-09-22T00:00:00.000Z"),
+          observaciones: "Se revisa equipo y se identifica desgaste.",
+        },
+      ],
+    });
+    const request = makeCallbackRequest("obs:00002150");
+
+    await POST(request);
+
+    const [, text] = sendReplyMock.mock.calls[0];
+    expect(text).toContain("Se revisa equipo y se identifica desgaste.");
+  });
+
+  it("[7] 'obs:<parte>' sin Minutas relacionadas responde el aviso exacto pedido", async () => {
+    getByParteMock.mockResolvedValue({ parte: "00002150", logs: [] });
+    const request = makeCallbackRequest("obs:00002150");
+
+    await POST(request);
+
+    const [, text] = sendReplyMock.mock.calls[0];
+    expect(text).toContain("ℹ️ No hay observaciones registradas para esta solicitud.");
+  });
+
+  it("PARTE inexistente responde el mensaje de 'no encontrada', sin lanzar", async () => {
+    getByParteMock.mockResolvedValue(null);
+    const request = makeCallbackRequest("req:00009999");
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    const [, text] = sendReplyMock.mock.calls[0];
+    expect(text).toContain("No se encontró la solicitud");
+  });
+
+  it("siempre confirma el callback_query (answerCallbackQuery) aunque no se pueda responder en el chat", async () => {
+    getByParteMock.mockResolvedValue(null);
+    sendReplyMock.mockRejectedValueOnce(new Error("Telegram caído (prueba)"));
+    const request = makeCallbackRequest("req:00002150");
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(answerCallbackMock).toHaveBeenCalledWith("cbq_1");
+  });
+
+  it("confirma el callback_query incluso sin `message` (mensaje original demasiado viejo), sin intentar responder en ningún chat", async () => {
+    const request = makeRequest({ callback_query: { id: "cbq_2", data: "req:00002150" } });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(answerCallbackMock).toHaveBeenCalledWith("cbq_2");
+    expect(getByParteMock).not.toHaveBeenCalled();
+    expect(sendReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("callback_data no reconocido: confirma el callback_query, pero no consulta nada ni responde en el chat", async () => {
+    const request = makeCallbackRequest("algo-desconocido");
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(answerCallbackMock).toHaveBeenCalledWith("cbq_1");
+    expect(getByParteMock).not.toHaveBeenCalled();
+    expect(sendReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("un callback_query nunca invoca consumeTechnicianTelegramLinkCode (esa ruta es exclusiva de mensajes de texto)", async () => {
+    getByParteMock.mockResolvedValue(null);
+    const request = makeCallbackRequest("req:00002150");
+
+    await POST(request);
+
+    expect(consumeMock).not.toHaveBeenCalled();
   });
 });
