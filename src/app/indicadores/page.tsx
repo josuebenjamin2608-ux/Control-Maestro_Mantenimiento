@@ -140,14 +140,13 @@ export default async function IndicadoresPage({
     closedTasks,
   };
 
-  // "Distribución por estado": sin un mes específico seleccionado (modo "Año
-  // actual", ver isYearMode) representa la situación ACTUAL de las
-  // solicitudes abiertas (ESTADO != Realizado, sin filtro de FECHA — mismo
-  // universo que "Estado actual de la operación"/"Backlog"), nunca el
-  // volumen del año completo. Con un mes específico seleccionado (incluido
-  // el default "Mes actual"), sigue siendo la distribución del período —
-  // comportamiento sin cambios.
-  const estadoDistributionStats = isYearMode ? openBucketCountsToDashboardStats(openCounts) : stats;
+  // "Distribución por estado": SIEMPRE la situación ACTUAL de las
+  // solicitudes abiertas (Solicitado + En espera, ESTADO != Realizado, sin
+  // filtro de FECHA — mismo universo que "Estado actual de la
+  // operación"/"Backlog", ver getOpenBucketCounts), independiente del
+  // período/año seleccionado. "Realizado" (atendidas) nunca participa: por
+  // construcción openBucketCountsToDashboardStats() siempre la deja en 0.
+  const estadoDistributionStats = openBucketCountsToDashboardStats(openCounts);
 
   const isEmpty = stats.total === 0;
   const currentIndicadoresHref = isYearMode
@@ -288,7 +287,7 @@ export default async function IndicadoresPage({
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base text-foreground">Distribución por estado</CardTitle>
-                  <CardDescription>Proporción real sobre las solicitudes del período.</CardDescription>
+                  <CardDescription>Distribución de las tareas abiertas actuales, sin importar la fecha.</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <EstadoDistribution stats={estadoDistributionStats} />

@@ -18,7 +18,7 @@ export function EstadoDistribution({ stats }: { stats: DashboardStats }) {
   const { openIndicator } = useIndicatorModal();
 
   if (stats.total === 0) {
-    return <p className="text-sm text-muted-foreground">Sin solicitudes en este período.</p>;
+    return <p className="text-sm text-muted-foreground">Sin tareas abiertas actualmente.</p>;
   }
 
   return (
@@ -33,8 +33,13 @@ export function EstadoDistribution({ stats }: { stats: DashboardStats }) {
             type="button"
             onClick={() =>
               openIndicator({
-                title: ESTADO_BUCKET_LABELS[bucket],
-                query: { indicator: "estado", bucket },
+                title: `${ESTADO_BUCKET_LABELS[bucket]} (abiertas)`,
+                subtitle: "Todas las fechas",
+                // "estadoActual" (no "estado"): mismo universo sin filtro de
+                // FECHA que alimenta este bucket — ver getOpenBucketCounts /
+                // openBucketCountsToDashboardStats. El contador y el detalle
+                // nunca deben divergir.
+                query: { indicator: "estadoActual", bucket },
               })
             }
             className="flex w-full items-center gap-3 rounded-md py-0.5 text-left transition-colors hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

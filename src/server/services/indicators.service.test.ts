@@ -577,3 +577,110 @@ describe("WIP — Solicitudes con ESTADO = \"En espera\" (getOpenBucketCounts().
     expect(afterCounts.espera).toBe(1);
   });
 });
+
+/**
+ * "Distribución por estado" (/indicadores, sección "Análisis histórico"):
+ * desde este cambio usa exactamente el mismo universo que "Estado actual de
+ * la operación"/WIP arriba — getOpenBucketCounts() (Solicitado + En espera,
+ * ESTADO != Realizado, SIN filtro de FECHA) — nunca getPeriodStats() del
+ * mes/año seleccionado. El detalle interactivo de cada barra usa
+ * getIndicatorRequests({ indicator: "estadoActual", bucket }); el bloque WIP
+ * de arriba ya prueba esa paridad contador/detalle para "espera" — estas
+ * pruebas cubren el bucket "pendiente" (Solicitado) con la misma garantía.
+ */
+describe("Distribución por estado — universo de tareas abiertas (Solicitado + En espera), independiente del período", () => {
+  it("ejemplo del pedido: Solicitado=5, En espera=10, Realizado=150 → total abiertas=15, Realizado no participa", async () => {
+    state.requests = [
+      ...Array.from({ length: 5 }, (_, i) => makeRequestRow({ id: `sol-${i}`, estado: "Solicitado" })),
+      ...Array.from({ length: 10 }, (_, i) => makeRequestRow({ id: `esp-${i}`, estado: "En espera" })),
+      ...Array.from({ length: 150 }, (_, i) => makeRequestRow({ id: `real-${i}`, estado: "Realizado" })),
+    ];
+
+    const counts = await getOpenBucketCounts();
+
+    expect(counts.totalAbiertas).toBe(15);
+    expect(counts.pendientes).toBe(5);
+    expect(counts.espera).toBe(10);
+  });
+
+  it("los porcentajes resultantes (misma fórmula que EstadoDistribution: Math.round(valor/total*100)) dan 33%/67% y suman 100%", async () => {
+    state.requests = [
+      ...Array.from({ length: 5 }, (_, i) => makeRequestRow({ id: `sol-${i}`, estado: "Solicitado" })),
+      ...Array.from({ length: 10 }, (_, i) => makeRequestRow({ id: `esp-${i}`, estado: "En espera" })),
+      ...Array.from({ length: 150 }, (_, i) => makeRequestRow({ id: `real-${i}`, estado: "Realizado" })),
+    ];
+
+    const counts = await getOpenBucketCounts();
+    const pctSolicitado = Math.round((counts.pendientes / counts.totalAbiertas) * 100);
+    const pctEnEspera = Math.round((counts.espera / counts.totalAbiertas) * 100);
+
+    expect(pctSolicitado).toBe(33);
+    expect(pctEnEspera).toBe(67);
+    expect(pctSolicitado + pctEnEspera).toBe(100);
+  });
+
+  it("una Solicitud creada hace 6 meses en estado 'Solicitado' cuenta igual que una de hoy", async () => {
+    state.requests = [makeRequestRow({ id: "vieja", estado: "Solicitado", fecha: daysAgo(180) })];
+
+    const counts = await getOpenBucketCounts();
+
+    expect(counts.pendientes).toBe(1);
+    expect(counts.totalAbiertas).toBe(1);
+  });
+
+  it("una Solicitud creada hace 6 meses en estado 'En espera' cuenta igual que una de hoy", async () => {
+    state.requests = [makeRequestRow({ id: "vieja", estado: "En espera", fecha: daysAgo(180) })];
+
+    const counts = await getOpenBucketCounts();
+
+    expect(counts.espera).toBe(1);
+    expect(counts.totalAbiertas).toBe(1);
+  });
+
+  it("una Solicitud creada HOY en estado 'Realizado' no cuenta como abierta", async () => {
+    state.requests = [makeRequestRow({ id: "hoy", estado: "Realizado", fecha: daysAgo(0) })];
+
+    const counts = await getOpenBucketCounts();
+
+    expect(counts.totalAbiertas).toBe(0);
+  });
+
+  it("sin ninguna Solicitud abierta: total=0 (EstadoDistribution nunca calcula value/0 en ese caso, ver estado-distribution.tsx)", async () => {
+    state.requests = [makeRequestRow({ id: "cerrada", estado: "Realizado" })];
+
+    const counts = await getOpenBucketCounts();
+
+    expect(counts).toEqual({ totalAbiertas: 0, pendientes: 0, espera: 0, programadas: 0, otros: 0 });
+  });
+
+  it("el detalle (getIndicatorRequests estadoActual/pendiente) devuelve exactamente las mismas solicitudes que componen el contador", async () => {
+    state.requests = [
+      makeRequestRow({ id: "sol-1", parte: "00000011", estado: "Solicitado" }),
+      makeRequestRow({ id: "sol-2", parte: "00000012", estado: "Solicitado" }),
+      makeRequestRow({ id: "esp-1", parte: "00000013", estado: "En espera" }),
+      makeRequestRow({ id: "real-1", parte: "00000014", estado: "Realizado" }),
+    ];
+
+    const [counts, detail] = await Promise.all([
+      getOpenBucketCounts(),
+      getIndicatorRequests({ indicator: "estadoActual", bucket: "pendiente", year: 2026 }),
+    ]);
+
+    expect(detail.total).toBe(counts.pendientes);
+    expect(detail.items.map((item) => item.parte).sort()).toEqual(["00000011", "00000012"]);
+    expect(detail.items.every((item) => item.estado === "Solicitado")).toBe(true);
+  });
+
+  it("una Solicitud de otro año (2020) y una de hoy cuentan igual — el 'período seleccionado' de la página no existe para este cálculo", async () => {
+    state.requests = [
+      makeRequestRow({ id: "2020", estado: "Solicitado", fecha: new Date(Date.UTC(2020, 0, 15)) }),
+      makeRequestRow({ id: "hoy", estado: "En espera", fecha: new Date() }),
+    ];
+
+    const counts = await getOpenBucketCounts();
+
+    expect(counts.totalAbiertas).toBe(2);
+    expect(counts.pendientes).toBe(1);
+    expect(counts.espera).toBe(1);
+  });
+});
