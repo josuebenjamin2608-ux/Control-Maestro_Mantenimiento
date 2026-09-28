@@ -209,6 +209,38 @@ describe("buildSolicitudesExportWorkbook", () => {
     expect(rows[0]["OBSERVACIONES"]).toBe("22/09/2026 - Observación real");
   });
 
+  it("una observación creada desde Telegram (fechafin null, solo fechaini) aparece en OBSERVACIONES usando fechaini como fecha, pero NUNCA rellena 'Fecha de Atención Evento'", async () => {
+    // Misma forma exacta que produce telegram-observacion.service.ts: fechafin
+    // queda en null a propósito (ver ese archivo) para que una observación no
+    // cuente como "atención"/cierre en este reporte ni en Indicadores.
+    state.requests = [makeRequestRow({ id: "r1", parte: "00002158", estado: "En espera" })];
+    state.logs = [
+      makeLogRow({
+        id: "l1",
+        maintenanceRequestId: "r1",
+        relationStatus: "RELATED",
+        fechaini: new Date(2026, 8, 23),
+        fechafin: null,
+        observaciones: "Se revisó la máquina. Se envía repuesto a taller metalmecánico.",
+        codemp: "EMP-001",
+        empleado: "Benjamin Arzuza",
+      }),
+    ];
+
+    const buffer = await buildSolicitudesExportWorkbook();
+    const { rows } = await readWorkbook(buffer);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]["OBSERVACIONES"]).toBe(
+      "23/09/2026 - Se revisó la máquina. Se envía repuesto a taller metalmecánico.",
+    );
+    // Clave: la Solicitud sigue "En espera" y esta Minuta no tiene FECHAFIN,
+    // así que getLatestFechafinByRequest no la ve — la columna queda vacía,
+    // nunca inventa una fecha de atención para una Solicitud que sigue abierta.
+    expect(rows[0]["Fecha de Atención Evento"]).toBeFalsy();
+    expect(rows[0]["ESTADO"]).toBe("En espera");
+  });
+
   it("TEST 5: una solicitud sin Minuta relacionada deja 'Fecha de Atención Evento' vacía", async () => {
     state.requests = [makeRequestRow({ id: "r1", parte: "00000001" })];
     state.logs = [];

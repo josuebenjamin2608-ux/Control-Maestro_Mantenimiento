@@ -3,12 +3,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MaintenanceRequest } from "@/generated/prisma/client";
 import {
   answerTelegramCallbackQuery,
-  buildObservacionesQueryText,
+  answerTelegramCallbackQueryWithAlert,
+  buildAgregarObservacionPromptText,
+  buildObservacionCancelledText,
+  buildObservacionEmptyTextWarning,
+  buildTelegramActionNotAuthorizedText,
+  buildObservacionRegisteredText,
+  buildHistorialAtencionQueryText,
   buildSolicitudNotFoundText,
   buildSolicitudQueryText,
   buildTelegramLinkChatAlreadyLinkedText,
   buildTelegramLinkInvalidCodeText,
   buildTelegramLinkSuccessText,
+  isObservacionCancelCommand,
+  parseAgregarObservacionPromptParte,
   sendMaintenanceRequestCreatedNotification,
   sendTechnicianAssignedDirectNotification,
   sendTechnicianAssignedNotification,
@@ -317,12 +325,14 @@ describe("sendTechnicianAssignedNotification", () => {
     const rows = body.reply_markup.inline_keyboard as { text: string; callback_data?: string; url?: string }[][];
     const flatButtons = rows.flat();
     const verSolicitud = flatButtons.find((b) => b.text === "📋 Ver solicitud");
-    const verObservaciones = flatButtons.find((b) => b.text === "📝 Ver observaciones");
+    const agregarObservacion = flatButtons.find((b) => b.text === "📝 Agregar observación");
+    const historial = flatButtons.find((b) => b.text === "📜 Historial de atención");
     const verEnSimi = flatButtons.find((b) => b.text === "🔗 Ver solicitud en SIMI");
 
     // parte crudo (con ceros a la izquierda), nunca formatParteDisplay — mismo criterio que el enlace.
     expect(verSolicitud?.callback_data).toBe("req:00002119");
-    expect(verObservaciones?.callback_data).toBe("obs:00002119");
+    expect(agregarObservacion?.callback_data).toBe("addobs:00002119");
+    expect(historial?.callback_data).toBe("hist:00002119");
     // "Ver solicitud en SIMI" se conserva como botón de enlace, sin quitar la línea de texto existente.
     expect(verEnSimi?.url).toContain("/solicitudes/00002119");
     expect(body.text).toContain("Ver solicitud en SIMI");
@@ -433,7 +443,8 @@ describe("sendTechnicianAssignedDirectNotification — [11] notificación indivi
     const body = JSON.parse(init.body);
     const flatButtons = (body.reply_markup.inline_keyboard as { text: string; callback_data?: string }[][]).flat();
     expect(flatButtons.find((b) => b.text === "📋 Ver solicitud")?.callback_data).toBe("req:00002119");
-    expect(flatButtons.find((b) => b.text === "📝 Ver observaciones")?.callback_data).toBe("obs:00002119");
+    expect(flatButtons.find((b) => b.text === "📝 Agregar observación")?.callback_data).toBe("addobs:00002119");
+    expect(flatButtons.find((b) => b.text === "📜 Historial de atención")?.callback_data).toBe("hist:00002119");
   });
 
   it("omite en silencio (solo warning) si TELEGRAM_BOT_TOKEN no está configurado — nunca requiere TELEGRAM_MAINTENANCE_CHAT_ID", async () => {
@@ -540,7 +551,7 @@ describe("sendTelegramWebhookReply + builders de texto — respuestas del webhoo
   });
 });
 
-describe("buildSolicitudQueryText / buildObservacionesQueryText / buildSolicitudNotFoundText — funciones puras, solo lectura", () => {
+describe("buildSolicitudQueryText / buildHistorialAtencionQueryText / buildSolicitudNotFoundText — funciones puras, solo lectura", () => {
   const PARTE = "00002150";
 
   function makeSummaryRequest(overrides: Partial<Parameters<typeof buildSolicitudQueryText>[0]> = {}) {
@@ -583,35 +594,54 @@ describe("buildSolicitudQueryText / buildObservacionesQueryText / buildSolicitud
     expect(text).not.toContain("Técnico Retirado");
   });
 
-  it("[3, 4] buildObservacionesQueryText consulta las Minutas relacionadas y muestra las que tienen texto, en el orden recibido (cronológico)", () => {
-    const text = buildObservacionesQueryText(PARTE, [
+  it("[10] buildHistorialAtencionQueryText consulta las Minutas relacionadas y muestra las que tienen texto, en el orden recibido (cronológico), con PARTE y Máquina en el encabezado", () => {
+    const text = buildHistorialAtencionQueryText(PARTE, "LOCATIVO", [
       { fechaini: new Date("2026-09-22T00:00:00.000Z"), fechafin: new Date("2026-09-22T00:00:00.000Z"), observaciones: "Se revisa equipo." },
       { fechaini: new Date("2026-09-23T00:00:00.000Z"), fechafin: new Date("2026-09-23T00:00:00.000Z"), observaciones: "Se solicita repuesto." },
     ]);
 
-    expect(text).toContain("OBSERVACIONES");
+    expect(text).toContain("HISTORIAL DE ATENCIÓN");
+    expect(text).toContain("PARTE:</b> 2150");
+    expect(text).toContain("Máquina:</b> LOCATIVO");
+    expect(text).toContain("📝");
     expect(text).toContain("Se revisa equipo.");
     expect(text).toContain("Se solicita repuesto.");
     expect(text.indexOf("Se revisa equipo.")).toBeLessThan(text.indexOf("Se solicita repuesto."));
   });
 
-  it("[7] una Solicitud sin Minutas relacionadas muestra el aviso exacto pedido", () => {
-    const text = buildObservacionesQueryText(PARTE, []);
+  it("una observación creada desde Telegram (fechafin null, solo fechaini) muestra correctamente su fecha en el historial", () => {
+    // Misma forma exacta que produce telegram-observacion.service.ts —
+    // fechafin queda en null a propósito, así que el historial debe caer al
+    // fallback `fechafin ?? fechaini` para mostrar la fecha.
+    const text = buildHistorialAtencionQueryText(PARTE, "LOCATIVO", [
+      {
+        fechaini: new Date("2026-09-23T00:00:00.000Z"),
+        fechafin: null,
+        observaciones: "Se revisó la máquina. Se envía repuesto a taller metalmecánico.",
+      },
+    ]);
 
-    expect(text).toContain("ℹ️ No hay observaciones registradas para esta solicitud.");
+    expect(text).toContain("Se revisó la máquina. Se envía repuesto a taller metalmecánico.");
+    expect(text).not.toContain("Sin fecha");
+  });
+
+  it("[10] una Solicitud sin historial de atención muestra el aviso exacto pedido", () => {
+    const text = buildHistorialAtencionQueryText(PARTE, "LOCATIVO", []);
+
+    expect(text).toContain("ℹ️ No hay historial de atención registrado para esta solicitud.");
   });
 
   it("Minutas relacionadas sin texto en OBSERVACIONES no aportan una entrada vacía", () => {
-    const text = buildObservacionesQueryText(PARTE, [
+    const text = buildHistorialAtencionQueryText(PARTE, "LOCATIVO", [
       { fechaini: null, fechafin: null, observaciones: null },
       { fechaini: null, fechafin: null, observaciones: "   " },
     ]);
 
-    expect(text).toContain("ℹ️ No hay observaciones registradas para esta solicitud.");
+    expect(text).toContain("ℹ️ No hay historial de atención registrado para esta solicitud.");
   });
 
   it("nunca escapa a HTML por accidente (el texto de la Minuta se sanea, no se interpreta)", () => {
-    const text = buildObservacionesQueryText(PARTE, [
+    const text = buildHistorialAtencionQueryText(PARTE, "LOCATIVO", [
       { fechaini: null, fechafin: new Date("2026-09-22T00:00:00.000Z"), observaciones: "<script>alert(1)</script>" },
     ]);
 
@@ -676,5 +706,133 @@ describe("answerTelegramCallbackQuery — [8, 9, 10] confirma el callback_query 
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("answerTelegramCallbackQueryWithAlert envía show_alert=true con el texto exacto pedido", async () => {
+    process.env[TOKEN_KEY] = FAKE_TOKEN;
+    fetchMock.mockResolvedValue(makeFetchResponse({ ok: true, status: 200, body: { ok: true } }));
+
+    await answerTelegramCallbackQueryWithAlert("cbq_999", buildTelegramActionNotAuthorizedText());
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body);
+    expect(body.callback_query_id).toBe("cbq_999");
+    expect(body.show_alert).toBe(true);
+    expect(body.text).toBe(buildTelegramActionNotAuthorizedText());
+  });
+
+  it("nunca lanza si Telegram falla al confirmar el callback_query con alerta", async () => {
+    process.env[TOKEN_KEY] = FAKE_TOKEN;
+    fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+
+    await expect(answerTelegramCallbackQueryWithAlert("cbq_999", "texto")).resolves.toBeUndefined();
+  });
+});
+
+describe("Agregar observación — builders y parsing (flujo de conversación stateless vía force_reply)", () => {
+  const PARTE = "00002161";
+
+  it("[1] buildAgregarObservacionPromptText muestra el título/ejemplo exacto pedido, con el PARTE mostrado en el título y el PARTE crudo embebido para el parseo exacto", () => {
+    const text = buildAgregarObservacionPromptText(PARTE);
+
+    expect(text).toContain("AGREGAR OBSERVACIÓN");
+    expect(text).toContain("SOLICITUD 2161"); // título: PARTE mostrado (sin ceros)
+    expect(text).toContain("PARTE: 00002161"); // marcador técnico: PARTE crudo, para parseo exacto (nunca aproximado)
+    expect(text).toContain("Escribe la observación o avance de la tarea.");
+    expect(text).toContain(
+      "Se revisó la máquina. Se requiere cambio de manija. Repuesto enviado a taller metalmecánico, pendiente de entrega.",
+    );
+    expect(text.toLowerCase()).toContain("cancelar");
+  });
+
+  it("[2] parseAgregarObservacionPromptParte recupera el PARTE exacto del texto plano que Telegram devuelve en reply_to_message.text", () => {
+    // Telegram entrega el texto SIN las etiquetas HTML de formato (<b>, etc.) — se simula así acá.
+    const plainText = buildAgregarObservacionPromptText(PARTE).replace(/<\/?b>/g, "");
+
+    expect(parseAgregarObservacionPromptParte(plainText)).toBe(PARTE);
+  });
+
+  it("nunca interpreta un mensaje ajeno (que no es el prompt de Agregar observación) como una respuesta de observación", () => {
+    expect(parseAgregarObservacionPromptParte("Hola, ¿cómo estás?")).toBeNull();
+    expect(parseAgregarObservacionPromptParte(undefined)).toBeNull();
+    expect(parseAgregarObservacionPromptParte(null)).toBeNull();
+  });
+
+  it("buildObservacionRegisteredText incluye PARTE (formateado) y el texto exacto de la observación, con el formato exacto pedido", () => {
+    const text = buildObservacionRegisteredText(
+      PARTE,
+      "Se revisó la máquina. Se requiere cambio de manija. Repuesto enviado a taller metalmecánico, pendiente de entrega.",
+    );
+
+    expect(text).toContain("Observación registrada");
+    expect(text).toContain("PARTE: 2161"); // formateado para mostrar, igual que el resto de confirmaciones
+    expect(text).toContain(
+      "Se revisó la máquina. Se requiere cambio de manija. Repuesto enviado a taller metalmecánico, pendiente de entrega.",
+    );
+  });
+
+  it("buildTelegramActionNotAuthorizedText devuelve un texto corto y estable", () => {
+    expect(buildTelegramActionNotAuthorizedText()).toContain("técnico activo");
+  });
+
+  it("buildObservacionCancelledText devuelve el texto exacto pedido", () => {
+    expect(buildObservacionCancelledText()).toBe("Operación cancelada. No se registró ninguna observación.");
+  });
+
+  it("buildObservacionEmptyTextWarning indica que debe escribir una observación", () => {
+    expect(buildObservacionEmptyTextWarning().toLowerCase()).toContain("observación");
+  });
+
+  it("[6] isObservacionCancelCommand reconoce 'cancelar'/'/cancelar' sin distinguir mayúsculas ni espacios, y rechaza cualquier otro texto", () => {
+    expect(isObservacionCancelCommand("cancelar")).toBe(true);
+    expect(isObservacionCancelCommand("CANCELAR")).toBe(true);
+    expect(isObservacionCancelCommand("  Cancelar  ")).toBe(true);
+    expect(isObservacionCancelCommand("/cancelar")).toBe(true);
+    expect(isObservacionCancelCommand("Se revisó la máquina.")).toBe(false);
+    expect(isObservacionCancelCommand("")).toBe(false);
+  });
+});
+
+describe("sendTelegramWebhookReply con force_reply — prompt de Agregar observación", () => {
+  const originalToken = process.env[TOKEN_KEY];
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    if (originalToken === undefined) delete process.env[TOKEN_KEY];
+    else process.env[TOKEN_KEY] = originalToken;
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("envía reply_markup force_reply + selective cuando se pasa explícitamente", async () => {
+    process.env[TOKEN_KEY] = FAKE_TOKEN;
+    fetchMock.mockResolvedValue(makeFetchResponse({ ok: true, status: 200, body: { ok: true } }));
+
+    await sendTelegramWebhookReply("555111", buildAgregarObservacionPromptText("00002158"), {
+      force_reply: true,
+      selective: true,
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body);
+    expect(body.reply_markup).toEqual({ force_reply: true, selective: true });
+  });
+
+  it("no incluye reply_markup cuando se omite (comportamiento existente sin cambios)", async () => {
+    process.env[TOKEN_KEY] = FAKE_TOKEN;
+    fetchMock.mockResolvedValue(makeFetchResponse({ ok: true, status: 200, body: { ok: true } }));
+
+    await sendTelegramWebhookReply("555111", "texto simple");
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body);
+    expect(body.reply_markup).toBeUndefined();
   });
 });

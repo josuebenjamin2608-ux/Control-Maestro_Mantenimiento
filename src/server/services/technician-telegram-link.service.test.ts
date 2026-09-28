@@ -11,6 +11,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 interface FakeTechnician {
   id: string;
   fullName: string;
+  employeeCode: string;
+  isActive: boolean;
   telegramChatId: string | null;
   telegramLinkedAt: Date | null;
 }
@@ -152,12 +154,15 @@ const {
   getTechnicianTelegramLinkStatus,
   consumeTechnicianTelegramLinkCode,
   unlinkTechnicianTelegram,
+  getActiveTechnicianByTelegramChatId,
 } = await import("./technician-telegram-link.service");
 
 function seedTechnician(id: string, fullName: string, overrides: Partial<FakeTechnician> = {}) {
   fakeState.technicians.set(id, {
     id,
     fullName,
+    employeeCode: id,
+    isActive: true,
     telegramChatId: null,
     telegramLinkedAt: null,
     ...overrides,
@@ -351,6 +356,29 @@ describe("technician-telegram-link.service", () => {
 
     it("lanza si el técnico no existe", async () => {
       await expect(getTechnicianTelegramLinkStatus("no-existe")).rejects.toThrow("El técnico no existe.");
+    });
+  });
+
+  describe("getActiveTechnicianByTelegramChatId — autorización reutilizada por 'Agregar avance'", () => {
+    it("devuelve el técnico cuando el chat_id está vinculado a un técnico activo", async () => {
+      seedTechnician("tech_1", "Benjamin Arzuza", { telegramChatId: "555111", employeeCode: "EMP-1" });
+
+      const result = await getActiveTechnicianByTelegramChatId("555111");
+
+      expect(result).toEqual({ id: "tech_1", employeeCode: "EMP-1", fullName: "Benjamin Arzuza" });
+    });
+
+    it("devuelve null cuando el técnico vinculado está desactivado (isActive: false)", async () => {
+      seedTechnician("tech_1", "Benjamin Arzuza", { telegramChatId: "555111", isActive: false });
+
+      const result = await getActiveTechnicianByTelegramChatId("555111");
+
+      expect(result).toBeNull();
+    });
+
+    it("devuelve null cuando ningún técnico tiene ese chat_id vinculado", async () => {
+      const result = await getActiveTechnicianByTelegramChatId("999999");
+      expect(result).toBeNull();
     });
   });
 });

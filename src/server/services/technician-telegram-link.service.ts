@@ -177,6 +177,33 @@ export async function consumeTechnicianTelegramLinkCode(
   }
 }
 
+export interface AuthorizedTelegramTechnician {
+  id: string;
+  employeeCode: string;
+  fullName: string;
+}
+
+/**
+ * Único punto de lectura para "¿qué técnico activo tiene vinculado este
+ * chat_id de Telegram?" — reutilizado por el flujo de "Agregar avance" del
+ * webhook para autorizar quién puede registrar un avance, sin crear ningún
+ * sistema de usuarios nuevo: la vinculación (`Technician.telegramChatId`) ya
+ * es la única fuente de verdad de "qué técnico es este chat de Telegram".
+ * Un técnico desactivado (`isActive: false`) nunca autoriza, aunque su
+ * chat siga vinculado — mismo criterio que `listTechnicians` en
+ * maintenance-requests.service.ts.
+ */
+export async function getActiveTechnicianByTelegramChatId(
+  telegramChatId: string,
+): Promise<AuthorizedTelegramTechnician | null> {
+  const technician = await db.technician.findUnique({
+    where: { telegramChatId },
+    select: { id: true, employeeCode: true, fullName: true, isActive: true },
+  });
+  if (!technician || !technician.isActive) return null;
+  return { id: technician.id, employeeCode: technician.employeeCode, fullName: technician.fullName };
+}
+
 /** Desvincula el Telegram de un técnico. No borra códigos históricos (trazabilidad de intentos pasados). */
 export async function unlinkTechnicianTelegram(technicianId: string): Promise<void> {
   const technician = await db.technician.findUnique({ where: { id: technicianId }, select: { id: true } });

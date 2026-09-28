@@ -43,6 +43,23 @@ export interface TelegramInlineKeyboardMarkup {
   inline_keyboard: TelegramInlineKeyboardButton[][];
 }
 
+/**
+ * `force_reply` — mecanismo NATIVO de Telegram para "el próximo mensaje de
+ * este usuario responde a este prompt", sin ningún estado propio en SIMI:
+ * el cliente de Telegram completa automáticamente `reply_to_message` (con el
+ * texto exacto de este mensaje) en el próximo mensaje que el usuario envíe,
+ * lo que el webhook usa para recuperar el PARTE (ver
+ * parseAgregarObservacionPromptParte). `selective: true` para que, en el chat
+ * grupal, el teclado de "responder" se sugiera solo al usuario que presionó
+ * el botón, nunca a todo el grupo.
+ */
+export interface TelegramForceReply {
+  force_reply: true;
+  selective?: true;
+}
+
+export type TelegramReplyMarkup = TelegramInlineKeyboardMarkup | TelegramForceReply;
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -204,23 +221,30 @@ function buildTechnicianAssignedText(request: MaintenanceRequest, technicianName
 
 /**
  * Menú interactivo debajo del mensaje de asignación (grupo y chat privado):
- * "Ver solicitud"/"Ver observaciones" son botones de ACCIÓN (callback_data
- * "req:<parte>"/"obs:<parte>", procesados por el webhook — ver
- * handleTelegramCallbackQuery en route.ts), nunca botones de "iniciar
- * atención"/"finalizar atención"/etc.: esa información sigue siendo
- * exclusiva de las Minutas, Telegram nunca la escribe. "Ver solicitud en
- * SIMI" se conserva como botón de enlace además de la línea de texto ya
- * existente en el mensaje — mismo destino, ninguna funcionalidad quitada.
- * `parte` va crudo (con ceros a la izquierda) en el callback_data, igual
- * criterio que buildSolicitudLink: es el valor real de columna, nunca el
- * formateado para mostrar.
+ * "Ver solicitud"/"Agregar observación"/"Historial de atención" son
+ * botones de ACCIÓN (callback_data "req:<parte>"/"addobs:<parte>"/"hist:<parte>",
+ * procesados por el webhook — ver handleTelegramCallbackQuery en
+ * route.ts), nunca botones de "iniciar atención"/"finalizar atención"/etc.:
+ * esa información sigue siendo exclusiva de las Minutas y del flujo
+ * existente de cierre de Solicitudes, que este menú nunca reemplaza ni
+ * dispara. "Agregar observación" es la única acción que ESCRIBE algo (una
+ * nueva Minuta) — ver telegram-observacion.service.ts; las otras dos son
+ * de solo lectura ("Historial de atención" es la evolución de la antigua
+ * "Ver observaciones": misma consulta, se mantiene tal como pide el punto 4
+ * de la especificación — "Ver observaciones" NO desaparece, solo cambió de
+ * nombre). "Ver solicitud en SIMI" se conserva como botón de enlace además
+ * de la línea de texto ya existente en el mensaje — mismo destino, ninguna
+ * funcionalidad quitada. `parte` va crudo (con ceros a la izquierda) en el
+ * callback_data, igual criterio que buildSolicitudLink: es el valor real de
+ * columna, nunca el formateado para mostrar.
  */
 function buildTechnicianAssignedKeyboard(parte: string): TelegramInlineKeyboardMarkup {
   const rows: TelegramInlineKeyboardButton[][] = [
     [
       { text: "📋 Ver solicitud", callback_data: `req:${parte}` },
-      { text: "📝 Ver observaciones", callback_data: `obs:${parte}` },
+      { text: "📝 Agregar observación", callback_data: `addobs:${parte}` },
     ],
+    [{ text: "📜 Historial de atención", callback_data: `hist:${parte}` }],
   ];
 
   const link = buildSolicitudLink(parte);
@@ -285,38 +309,155 @@ export function buildSolicitudQueryText(request: SolicitudSummaryRequest): strin
 }
 
 /**
- * Texto del botón "📝 Ver observaciones": CONSULTA de solo lectura de las
- * Minutas ya relacionadas con esta Solicitud (relación existente PARTE <->
- * OBSERVACIONES.trim(), materializada como MaintenanceLog.maintenanceRequestId
- * — ver comentario en maintenance-log-import.service.ts; nunca se recalcula
- * acá). `logs` DEBE venir ya filtrada a esa relación (p. ej.
- * MaintenanceRequest.logs, que por esa misma FK nunca incluye una Minuta
- * PENDING/UNRELATED) — esta función nunca decide qué está relacionado.
- * Minutas relacionadas sin texto en OBSERVACIONES se omiten (no aportan
- * nada que mostrar); si no queda ninguna con texto, se muestra el aviso
- * exacto pedido. Nunca crea ni modifica ninguna Minuta ni Solicitud.
+ * Texto del botón "📜 Historial de atención": CONSULTA de solo lectura de
+ * las Minutas ya relacionadas con esta Solicitud (relación existente PARTE
+ * <-> OBSERVACIONES.trim(), materializada como
+ * MaintenanceLog.maintenanceRequestId — ver comentario en
+ * maintenance-log-import.service.ts; nunca se recalcula acá). Incluye tanto
+ * las Minutas importadas desde Excel como las creadas por "Agregar
+ * observación" (ver telegram-observacion.service.ts) — son la MISMA tabla,
+ * sin distinción.
+ * `logs` DEBE venir ya filtrada a esa relación (p. ej. MaintenanceRequest.logs,
+ * que por esa misma FK nunca incluye una Minuta PENDING/UNRELATED) — esta
+ * función nunca decide qué está relacionado. Minutas relacionadas sin texto
+ * en OBSERVACIONES se omiten (no aportan nada que mostrar); si no queda
+ * ninguna con texto, se muestra el aviso exacto pedido. Nunca crea ni
+ * modifica ninguna Minuta ni Solicitud.
  */
-export function buildObservacionesQueryText(parte: string, logs: RelatedMinutaLog[]): string {
+export function buildHistorialAtencionQueryText(
+  parte: string,
+  maquina: string | null,
+  logs: RelatedMinutaLog[],
+): string {
   const parteDisplay = formatParteDisplay(parte);
-  const title = `📝 <b>OBSERVACIONES — SOLICITUD ${escapeHtml(parteDisplay)}</b>`;
+  const lines = [
+    "📋 <b>HISTORIAL DE ATENCIÓN</b>",
+    "",
+    `<b>PARTE:</b> ${escapeHtml(parteDisplay)}`,
+    `<b>Máquina:</b> ${displayOrDash(maquina)}`,
+    "",
+  ];
 
   const withText = logs.filter(
     (log) => log.observaciones !== null && log.observaciones.trim().length > 0,
   );
 
   if (withText.length === 0) {
-    return [title, "", "ℹ️ No hay observaciones registradas para esta solicitud."].join("\n");
+    lines.push("ℹ️ No hay historial de atención registrado para esta solicitud.");
+    return lines.join("\n");
   }
 
   // Cronológico — mismo orden que ya usa la ficha de la solicitud (ver
   // MinutaTimeline, orderBy fechaini "asc"); nunca se reordena por fechafin.
-  const entries = withText.map((log) => {
+  const entries: string[] = [];
+  withText.forEach((log, index) => {
+    if (index > 0) entries.push("");
     const date = log.fechafin ?? log.fechaini;
     const dateLabel = date ? MINUTA_DATE_FORMATTER.format(date) : "Sin fecha";
-    return `${escapeHtml(dateLabel)} - ${escapeHtml((log.observaciones as string).trim())}`;
+    entries.push(`📝 ${escapeHtml(dateLabel)}`, escapeHtml((log.observaciones as string).trim()));
   });
 
-  return [title, "", ...entries].join("\n");
+  return [...lines, ...entries].join("\n");
+}
+
+const AGREGAR_OBSERVACION_TITLE = "AGREGAR OBSERVACIÓN";
+const AGREGAR_OBSERVACION_PARTE_PATTERN = /^PARTE:\s*(\S+)/m;
+const CANCEL_COMMANDS = new Set(["cancelar", "/cancelar"]);
+
+/**
+ * Texto del botón "📝 Agregar observación": se envía junto con force_reply
+ * (ver TelegramForceReply) para que el próximo mensaje del usuario quede
+ * automáticamente marcado por Telegram como respuesta a ESTE mensaje
+ * (`reply_to_message`) — así SIMI "recuerda temporalmente" para qué PARTE
+ * está escribiendo ese chat/usuario, sin ninguna tabla de estado nueva. El
+ * título muestra el PARTE en formato legible ("SOLICITUD 2161"), pero
+ * además incluye una línea técnica "PARTE: <valor crudo>" (nunca
+ * formatParteDisplay, que recorta ceros a la izquierda de forma no siempre
+ * reversible) precisamente para que parseAgregarObservacionPromptParte
+ * pueda recuperarlo con una coincidencia exacta, nunca aproximada — cumple
+ * la regla "la observación debe pertenecer exactamente a la solicitud,
+ * nunca una relación difusa". parseAgregarObservacionPromptParte es la
+ * única forma en que el webhook interpreta este texto: cualquier cambio
+ * acá debe mantenerse en sincronía con esa función.
+ */
+export function buildAgregarObservacionPromptText(parte: string): string {
+  const parteDisplay = formatParteDisplay(parte);
+  return [
+    `📝 <b>${AGREGAR_OBSERVACION_TITLE} – SOLICITUD ${escapeHtml(parteDisplay)}</b>`,
+    `PARTE: ${escapeHtml(parte)}`,
+    "",
+    "Escribe la observación o avance de la tarea.",
+    "",
+    "Ejemplo:",
+    '"Se revisó la máquina. Se requiere cambio de manija. Repuesto enviado a taller metalmecánico, pendiente de entrega."',
+    "",
+    'Escribe "cancelar" para cancelar.',
+  ].join("\n");
+}
+
+/**
+ * Recupera el PARTE crudo de un `reply_to_message.text` — o `null` si ese
+ * texto no es el prompt de "Agregar observación" (p. ej. el usuario
+ * respondió a otro mensaje cualquiera, o no hay `reply_to_message`). Exige
+ * que el texto contenga el título exacto Y una línea "PARTE: <valor>" —
+ * nunca infiere el PARTE de otra forma (p. ej. buscándolo en el texto del
+ * propio mensaje del usuario), evitando cualquier relación difusa o
+ * aproximada.
+ */
+export function parseAgregarObservacionPromptParte(promptText: string | null | undefined): string | null {
+  if (!promptText || !promptText.includes(AGREGAR_OBSERVACION_TITLE)) return null;
+  const match = promptText.match(AGREGAR_OBSERVACION_PARTE_PATTERN);
+  return match ? match[1] : null;
+}
+
+/** true si el texto (ya recortado) es un comando de cancelación ("cancelar"/"/cancelar", sin distinguir mayúsculas). */
+export function isObservacionCancelCommand(text: string): boolean {
+  return CANCEL_COMMANDS.has(text.trim().toLowerCase());
+}
+
+/**
+ * Texto de confirmación tras registrar una observación ("Agregar
+ * observación" -> MaintenanceLog nuevo, ver
+ * telegram-observacion.service.ts). `texto` es exactamente lo que el
+ * usuario escribió (ya guardado tal cual en OBSERVACIONES) — nunca se
+ * reformula ni se recorta acá.
+ */
+export function buildObservacionRegisteredText(parte: string, texto: string): string {
+  return [
+    "✅ Observación registrada",
+    "",
+    `PARTE: ${escapeHtml(formatParteDisplay(parte))}`,
+    "",
+    `"${escapeHtml(texto)}"`,
+  ].join("\n");
+}
+
+/** Respuesta cuando el usuario cancela el flujo de "Agregar observación" (ver isObservacionCancelCommand). Nunca crea nada. */
+export function buildObservacionCancelledText(): string {
+  return "Operación cancelada. No se registró ninguna observación.";
+}
+
+/** Respuesta cuando el usuario responde al prompt con un mensaje vacío (tras trim) — nunca se guarda una observación en blanco. */
+export function buildObservacionEmptyTextWarning(): string {
+  return 'Debes escribir un texto para la observación. Intenta nuevamente, o escribe "cancelar" para cancelar.';
+}
+
+/**
+ * Popup corto (answerCallbackQuery con show_alert) cuando quien presionó
+ * cualquier botón del menú de asignación ("Ver solicitud"/"Agregar
+ * observación"/"Historial de atención") no es un técnico activo con
+ * Telegram vinculado a SIMI (ver getActiveTechnicianByTelegramChatId) —
+ * reutiliza EXACTAMENTE el mecanismo de identificación de técnicos ya
+ * existente (vinculación por chat_id), nunca un sistema de usuarios nuevo.
+ * Deliberadamente genérico: nunca menciona el PARTE, la acción intentada,
+ * ni si la Solicitud existe — un usuario no autorizado no debe poder
+ * aprender nada sobre datos de SIMI a partir de esta respuesta. En el caso
+ * de "Agregar observación", el prompt de force_reply nunca se envía: sin
+ * prompt, no hay forma de que un mensaje posterior se interprete como
+ * observación para ese PARTE.
+ */
+export function buildTelegramActionNotAuthorizedText(): string {
+  return "❌ Tu Telegram no está vinculado a un técnico activo en SIMI.";
 }
 
 /** Respuesta del webhook cuando el callback_query trae un PARTE que ya no existe (defensivo; hoy no hay borrado de Solicitudes). */
@@ -436,7 +577,7 @@ async function dispatchTelegramMessage(
   text: string,
   eventName: string,
   parte: string | null,
-  replyMarkup?: TelegramInlineKeyboardMarkup,
+  replyMarkup?: TelegramReplyMarkup,
 ): Promise<void> {
   await callTelegramApi(
     token,
@@ -543,21 +684,29 @@ export async function sendTechnicianAssignedDirectNotification(
 }
 
 /**
- * Envía una respuesta de texto simple al chat privado que escribió al bot
- * — usada exclusivamente por el webhook de vinculación
- * (/api/telegram/webhook) para confirmar o rechazar un código recibido.
- * Nunca lanza, mismo contrato que el resto de las funciones de envío de
- * este archivo. `buildTelegramLinkSuccessText`/`buildTelegramLinkInvalidCodeText`/
+ * Envía una respuesta de texto al chat que escribió al bot o presionó un
+ * botón — usada por el webhook (/api/telegram/webhook) tanto para el flujo
+ * de vinculación como para las respuestas de los botones del menú de
+ * asignación y el prompt/confirmación de "Agregar observación".
+ * `replyMarkup` es opcional (p. ej. TelegramForceReply para el prompt de
+ * observación); cuando se omite, el body queda igual que siempre. Nunca
+ * lanza, mismo contrato
+ * que el resto de las funciones de envío de este archivo.
+ * `buildTelegramLinkSuccessText`/`buildTelegramLinkInvalidCodeText`/
  * `buildTelegramLinkChatAlreadyLinkedText` quedan exportadas para que el
  * route handler arme el texto exacto sin duplicar el escapado HTML acá.
  */
-export async function sendTelegramWebhookReply(chatId: string, text: string): Promise<void> {
+export async function sendTelegramWebhookReply(
+  chatId: string,
+  text: string,
+  replyMarkup?: TelegramReplyMarkup,
+): Promise<void> {
   const config = validateBotTokenOnly();
   if (!config.ok) {
-    console.warn(`[telegram] ${config.reason}; no se pudo enviar la respuesta del webhook de vinculación.`);
+    console.warn(`[telegram] ${config.reason}; no se pudo enviar la respuesta del webhook.`);
     return;
   }
-  await dispatchTelegramMessage(config.token, chatId, text, "telegram_link_webhook_reply", null);
+  await dispatchTelegramMessage(config.token, chatId, text, "telegram_webhook_reply", null, replyMarkup);
 }
 
 /**
@@ -582,6 +731,33 @@ export async function answerTelegramCallbackQuery(callbackQueryId: string): Prom
     "answerCallbackQuery",
     { callback_query_id: callbackQueryId },
     "callback_query_ack",
+    null,
+  );
+}
+
+/**
+ * Variante de answerTelegramCallbackQuery que además muestra un popup corto
+ * (show_alert) — usada SOLO para rechazar "Agregar observación" cuando
+ * quien presionó el botón no es un técnico activo con Telegram vinculado
+ * (ver buildObservacionNotAuthorizedText). El resto de los callbacks (solo lectura)
+ * sigue usando answerTelegramCallbackQuery sin alerta, sin cambios. Nunca
+ * lanza, mismo contrato que el resto de las funciones de envío de este
+ * archivo.
+ */
+export async function answerTelegramCallbackQueryWithAlert(
+  callbackQueryId: string,
+  text: string,
+): Promise<void> {
+  const config = validateBotTokenOnly();
+  if (!config.ok) {
+    console.warn(`[telegram] ${config.reason}; no se pudo responder al callback_query con alerta.`);
+    return;
+  }
+  await callTelegramApi(
+    config.token,
+    "answerCallbackQuery",
+    { callback_query_id: callbackQueryId, text, show_alert: true },
+    "callback_query_ack_alert",
     null,
   );
 }

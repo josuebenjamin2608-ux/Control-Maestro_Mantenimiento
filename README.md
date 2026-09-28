@@ -227,6 +227,103 @@ npx prisma studio
    correspondiente) — esto no ocurre automáticamente durante el build salvo
    que se configure explícitamente.
 
+## 9. Configuración del Webhook de Telegram
+
+SIMI recibe eventos de Telegram (vinculación de técnicos, "Ver solicitud",
+"Agregar observación", "Historial de atención") en el endpoint:
+
+```
+/api/telegram/webhook
+```
+
+(`src/app/api/telegram/webhook/route.ts`). Ese endpoint **valida** que cada
+request venga realmente de Telegram comparando el header
+`X-Telegram-Bot-Api-Secret-Token` contra la variable de entorno
+`TELEGRAM_WEBHOOK_SECRET` (comparación de tiempo constante, falla cerrado si
+la variable no está configurada) — pero **nunca registra el webhook por sí
+mismo**. Ese registro (`setWebhook`) es una operación administrativa que se
+hace una única vez, a mano, fuera del código y del proceso de deploy — no
+hay ningún script en este repositorio que lo haga, y así debe seguir
+(la configuración del webhook es intencionalmente manual, nunca automática
+en el build).
+
+### 9.1 Variables de entorno involucradas
+
+| Variable | Para qué sirve | Dónde se usa |
+| --- | --- | --- |
+| `TELEGRAM_BOT_TOKEN` | Token del bot (formato `<bot_id>:<hash>`), obtenido de [@BotFather](https://t.me/BotFather). Lo usa SIMI para **enviar** mensajes/notificaciones a Telegram, y es el mismo valor que se usa en el comando `setWebhook` de más abajo. | `src/server/services/telegram.service.ts` |
+| `TELEGRAM_WEBHOOK_SECRET` | Secreto propio de SIMI (no es un token de Telegram) que Telegram reenvía en cada request al webhook una vez configurado vía `secret_token` en `setWebhook`. SIMI lo compara para descartar cualquier request que no venga realmente de Telegram. **Obligatoria**: sin ella, el webhook rechaza el 100% de los requests. | `src/app/api/telegram/webhook/route.ts` |
+
+Ambas se documentan (sin valores reales) en `.env.example`. Nunca se
+hardcodean en el código ni se exponen al navegador (nunca usar el prefijo
+`NEXT_PUBLIC_` para ninguna de las dos).
+
+### 9.2 Procedimiento (manual, una sola vez por entorno)
+
+1. **Vercel — Environment Variables** (Project Settings → Environment
+   Variables), para el entorno **Production**:
+   - Confirmar/crear `TELEGRAM_BOT_TOKEN` con el token real del bot.
+   - Crear `TELEGRAM_WEBHOOK_SECRET` con un valor aleatorio largo (ej.
+     `openssl rand -hex 32`). Guardalo en un lugar seguro: lo necesitás
+     textualmente en el paso siguiente.
+   - Si creaste o cambiaste alguna de las dos, volvé a desplegar
+     Production (Vercel no reinyecta variables de entorno a un build ya
+     generado).
+
+2. **Registrar el webhook en Telegram** (`setWebhook`), usando el dominio
+   **estable** de Production — nunca una URL de Preview, que cambia en cada
+   deploy y rompería el webhook constantemente:
+
+   ```bash
+   curl -X POST "https://api.telegram.org/bot<BOT_TOKEN>/setWebhook" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "url": "https://<TU_DOMINIO>/api/telegram/webhook",
+       "secret_token": "<WEBHOOK_SECRET>"
+     }'
+   ```
+
+   Reemplazá `<BOT_TOKEN>`, `<TU_DOMINIO>` y `<WEBHOOK_SECRET>` por los
+   valores reales — `<WEBHOOK_SECRET>` debe ser **exactamente** el mismo
+   string que configuraste como `TELEGRAM_WEBHOOK_SECRET` en Vercel; un
+   desajuste entre ambos hace que Telegram reciba 401 en todas las
+   entregas y el bot deje de responder por completo (fue exactamente lo
+   que pasó la vez anterior que se intentó esta validación — ver
+   `src/app/api/telegram/webhook/route.ts` y el commit histórico
+   `4f994c8`).
+
+   Respuesta esperada: `{"ok":true,"result":true,"description":"Webhook was set"}`.
+
+3. **Verificar con `getWebhookInfo`**:
+
+   ```bash
+   curl "https://api.telegram.org/bot<BOT_TOKEN>/getWebhookInfo"
+   ```
+
+   Revisar en la respuesta:
+   - `"url"` → debe ser exactamente `https://<TU_DOMINIO>/api/telegram/webhook`.
+   - `"last_error_message"` → no debería aparecer (o, si aparece uno
+     anterior a esta configuración, no debería repetirse después de un
+     update real).
+   - `"pending_update_count"` → idealmente `0`.
+
+4. **Prueba manual en Telegram**: enviar un mensaje o presionar un botón
+   del menú de asignación y confirmar que SIMI responde con normalidad;
+   con un usuario no vinculado, confirmar que recibe el mensaje genérico
+   de no autorizado en vez de datos de la Solicitud.
+
+### 9.3 Deployment Protection de Vercel
+
+Si tu proyecto de Vercel tiene **Deployment Protection** (Vercel
+Authentication/SSO) habilitada para todo el deployment, eso puede impedir
+que Telegram alcance `/api/telegram/webhook` — Telegram no puede
+autenticarse contra el login de Vercel. Esto se configura en el dashboard
+de Vercel (fuera de este repositorio) y no puede confirmarse ni resolverse
+desde el código: si tenés esa protección activa, revisá en Vercel las
+opciones de exclusión por ruta o el "Protection Bypass for Automation"
+para permitir que Telegram llegue a ese endpoint específico sin afectar la
+protección del resto de la aplicación.
+
 ## Próxima fase
 
 Con la base ya configurada, el trabajo siguiente es habilitar los módulos

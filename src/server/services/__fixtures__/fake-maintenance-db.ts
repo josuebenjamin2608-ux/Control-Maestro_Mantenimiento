@@ -231,13 +231,22 @@ function groupBy(rows: FakeRow[], args: GroupByArgs): FakeRow[] {
 export interface FakeDbState {
   requests: FakeRow[];
   logs: FakeRow[];
+  /** Opcional: solo los tests de vinculación/avance de Telegram necesitan técnicos. */
+  technicians?: FakeRow[];
 }
+
+interface FindFirstArgs {
+  where?: WhereInput;
+  orderBy?: Record<string, "asc" | "desc">;
+}
+
+let fakeLogIdCounter = 0;
 
 /**
  * Crea el objeto `db` falso una sola vez; los tests mutan `state.requests`/
- * `state.logs` (p. ej. en beforeEach) y las próximas llamadas ya ven las
- * filas nuevas, porque los métodos leen `state` en el momento de ejecutarse,
- * no en el momento de crearse.
+ * `state.logs`/`state.technicians` (p. ej. en beforeEach) y las próximas
+ * llamadas ya ven las filas nuevas, porque los métodos leen `state` en el
+ * momento de ejecutarse, no en el momento de crearse.
  */
 export function createFakeDb(state: FakeDbState) {
   return {
@@ -249,6 +258,36 @@ export function createFakeDb(state: FakeDbState) {
     },
     maintenanceLog: {
       findMany: (args?: FindManyArgs) => Promise.resolve(findMany(state, state.logs, args)),
+      findFirst: (args?: FindFirstArgs) => {
+        let result = state.logs.filter((row) => matchWhere(row, args?.where));
+        if (args?.orderBy) {
+          const [field, direction] = Object.entries(args.orderBy)[0] as [string, "asc" | "desc"];
+          result = [...result].sort((a, b) => {
+            const cmp = compareForSort(a[field], b[field]);
+            return direction === "desc" ? -cmp : cmp;
+          });
+        }
+        return Promise.resolve(result[0] ? { ...result[0] } : null);
+      },
+      create: (args: { data: FakeRow }) => {
+        fakeLogIdCounter += 1;
+        // createdAt/updatedAt tienen @default(now())/@updatedAt en el schema
+        // real — se simulan igual acá para que una guarda de duplicados por
+        // ventana de tiempo (createdAt: {gte}) funcione en los tests sin que
+        // cada test tenga que pasarlo explícitamente.
+        const row: FakeRow = {
+          id: `fake-log-${fakeLogIdCounter}`,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          ...args.data,
+        };
+        state.logs.push(row);
+        return Promise.resolve({ ...row });
+      },
+    },
+    technician: {
+      findUnique: (args: FindUniqueArgs) => Promise.resolve(findUnique(state, state.technicians ?? [], args)),
+      findMany: (args?: FindManyArgs) => Promise.resolve(findMany(state, state.technicians ?? [], args)),
     },
   };
 }
@@ -283,6 +322,17 @@ export function makeLogRow(overrides: Partial<FakeRow> & { id: string }): FakeRo
     fechaini: null,
     fechafin: null,
     observaciones: null,
+    ...overrides,
+  };
+}
+
+/** Fila mínima de Technician — los campos que la autorización de avances de Telegram realmente lee. */
+export function makeTechnicianRow(overrides: Partial<FakeRow> & { id: string }): FakeRow {
+  return {
+    employeeCode: overrides.id,
+    fullName: "Técnico de Prueba",
+    isActive: true,
+    telegramChatId: null,
     ...overrides,
   };
 }
