@@ -143,7 +143,11 @@ export default async function SolicitudDetailPage({
 
             <div className="flex flex-col gap-2 lg:w-56 lg:shrink-0 lg:border-l lg:border-border lg:pl-6">
               <SectionLabel>Fecha compromiso</SectionLabel>
-              <CommitmentDateField maintenanceRequestId={request.id} value={request.commitmentDate} />
+              <CommitmentDateField
+                maintenanceRequestId={request.id}
+                value={request.commitmentDate}
+                responsibleArea={request.responsibleArea}
+              />
             </div>
           </CardContent>
         </Card>

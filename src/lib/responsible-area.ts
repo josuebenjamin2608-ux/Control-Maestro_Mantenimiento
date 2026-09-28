@@ -27,3 +27,18 @@ export const RESPONSIBLE_AREA_OPTIONS: { value: MaintenanceRequestResponsibleAre
 
 /** Valor explícito de URL/filtro para "Sin definir" (responsibleArea = null). */
 export const RESPONSIBLE_AREA_UNDEFINED_VALUE = "sin_definir";
+
+/**
+ * Responsable = Producción SIN una fecha de compromiso definida: la atención
+ * depende de Producción, así que SIMI no debe inventar una fecha (ver
+ * CommitmentDateField, detalle de Solicitud). En ese único caso el campo
+ * muestra un texto fijo en vez del selector de fecha; cualquier otra
+ * combinación (otro responsable, o Producción con una fecha ya cargada)
+ * conserva el comportamiento normal del selector.
+ */
+export function isAwaitingProduccion(
+  responsibleArea: MaintenanceRequestResponsibleArea | null,
+  commitmentDate: Date | null,
+): boolean {
+  return responsibleArea === "PRODUCCION" && commitmentDate === null;
+}
