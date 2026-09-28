@@ -32,7 +32,7 @@ const {
   getComplianceSummary,
   getMonthlyCountsForYear,
 } = await import("./indicators.service");
-const { getOpenRequestsByResponsibleArea } = await import("./maintenance-requests.service");
+const { getOpenBucketCounts, getOpenRequestsByResponsibleArea } = await import("./maintenance-requests.service");
 
 beforeEach(() => {
   state.requests = [];
@@ -434,5 +434,146 @@ describe("getMonthlyCountsForYear — truncado de meses futuros", () => {
     const thisMonthPoint = points.find((point) => point.month === thisMonthIndex + 1);
 
     expect(thisMonthPoint?.count).toBe(1);
+  });
+});
+
+/**
+ * WIP ("Work In Progress") — indicador nuevo de /indicadores, sin lógica de
+ * cálculo nueva: para esta etapa, WIP = getOpenBucketCounts().espera
+ * (maintenance-requests.service.ts), el MISMO conteo que ya usa la tarjeta
+ * "En espera" de "Estado actual de la operación", y su detalle reutiliza
+ * getIndicatorRequests({ indicator: "estadoActual", bucket: "espera" })
+ * SIN cambios — el mismo WHERE que ya arma getEstadoWhereForBucket. Estas
+ * pruebas no ejercitan código nuevo: documentan y protegen el contrato
+ * exacto del que depende WipCard (src/components/indicadores/wip-card.tsx),
+ * para que un cambio futuro en esas funciones nunca rompa WIP en silencio.
+ */
+describe("WIP — Solicitudes con ESTADO = \"En espera\" (getOpenBucketCounts().espera + getIndicatorRequests estadoActual/espera)", () => {
+  it("[1] 6 solicitudes 'En espera' (junto con otras de otros estados) → WIP = 6", async () => {
+    state.requests = [
+      ...Array.from({ length: 6 }, (_, i) => makeRequestRow({ id: `espera-${i}`, estado: "En espera" })),
+      makeRequestRow({ id: "solicitado-1", estado: "Solicitado" }),
+      makeRequestRow({ id: "realizado-1", estado: "Realizado" }),
+    ];
+
+    const counts = await getOpenBucketCounts();
+
+    expect(counts.espera).toBe(6);
+  });
+
+  it("[2] solicitudes 'Solicitado' NUNCA cuentan como WIP", async () => {
+    state.requests = [
+      makeRequestRow({ id: "r1", estado: "Solicitado" }),
+      makeRequestRow({ id: "r2", estado: "Solicitado" }),
+    ];
+
+    const counts = await getOpenBucketCounts();
+
+    expect(counts.espera).toBe(0);
+  });
+
+  it("[3] solicitudes 'Realizado' NUNCA cuentan como WIP", async () => {
+    state.requests = [
+      makeRequestRow({ id: "r1", estado: "Realizado" }),
+      makeRequestRow({ id: "r2", estado: "Realizado" }),
+    ];
+
+    const counts = await getOpenBucketCounts();
+
+    expect(counts.espera).toBe(0);
+  });
+
+  it("[4] una solicitud 'En espera' cuenta sin importar su antigüedad (WIP no filtra por FECHA)", async () => {
+    state.requests = [
+      makeRequestRow({ id: "reciente", estado: "En espera", fecha: daysAgo(1) }),
+      makeRequestRow({ id: "antigua", estado: "En espera", fecha: daysAgo(400) }),
+      makeRequestRow({ id: "sin-fecha", estado: "En espera", fecha: null }),
+    ];
+
+    const counts = await getOpenBucketCounts();
+
+    expect(counts.espera).toBe(3);
+  });
+
+  it("[5] el detalle (getIndicatorRequests estadoActual/espera) devuelve exactamente las mismas solicitudes que componen el contador", async () => {
+    state.requests = [
+      makeRequestRow({ id: "espera-1", parte: "00000001", estado: "En espera" }),
+      makeRequestRow({ id: "espera-2", parte: "00000002", estado: "En espera" }),
+      makeRequestRow({ id: "solicitado-1", parte: "00000003", estado: "Solicitado" }),
+      makeRequestRow({ id: "realizado-1", parte: "00000004", estado: "Realizado" }),
+    ];
+
+    const [counts, detail] = await Promise.all([
+      getOpenBucketCounts(),
+      getIndicatorRequests({ indicator: "estadoActual", bucket: "espera", year: 2026 }),
+    ]);
+
+    expect(detail.total).toBe(counts.espera);
+    expect(detail.items.map((item) => item.parte).sort()).toEqual(["00000001", "00000002"]);
+    expect(detail.items.every((item) => item.estado === "En espera")).toBe(true);
+  });
+
+  it("[6] sin solicitudes 'En espera' → WIP = 0", async () => {
+    state.requests = [
+      makeRequestRow({ id: "r1", estado: "Solicitado" }),
+      makeRequestRow({ id: "r2", estado: "Realizado" }),
+    ];
+
+    const counts = await getOpenBucketCounts();
+
+    expect(counts.espera).toBe(0);
+  });
+
+  it("[7] una Solicitud 'En espera' con múltiples Minutas (RELATED) sigue contando exactamente 1 vez — las Minutas son irrelevantes para WIP", async () => {
+    state.requests = [makeRequestRow({ id: "r1", parte: "00002158", estado: "En espera" })];
+    state.logs = [
+      makeLogRow({ id: "l1", maintenanceRequestId: "r1", relationStatus: "RELATED", observaciones: "Avance 1" }),
+      makeLogRow({ id: "l2", maintenanceRequestId: "r1", relationStatus: "RELATED", observaciones: "Avance 2" }),
+      makeLogRow({ id: "l3", maintenanceRequestId: "r1", relationStatus: "RELATED", observaciones: "Avance 3" }),
+    ];
+
+    const [counts, detail] = await Promise.all([
+      getOpenBucketCounts(),
+      getIndicatorRequests({ indicator: "estadoActual", bucket: "espera", year: 2026 }),
+    ]);
+
+    expect(counts.espera).toBe(1);
+    expect(detail.total).toBe(1);
+  });
+
+  it("[8] una observación creada desde Telegram (Minuta RELATED con fechafin null, mismo shape que telegram-observacion.service.ts) no altera el WIP — solo el ESTADO de la Solicitud importa", async () => {
+    state.requests = [
+      makeRequestRow({ id: "r1", parte: "00002158", estado: "En espera" }),
+      makeRequestRow({ id: "r2", parte: "00002159", estado: "Solicitado" }),
+    ];
+    state.logs = [
+      // Misma forma exacta que produce registerObservacionFromTelegram: fechafin queda null.
+      makeLogRow({
+        id: "l1",
+        maintenanceRequestId: "r1",
+        relationStatus: "RELATED",
+        fechaini: new Date(),
+        fechafin: null,
+        observaciones: "Se revisó la máquina desde Telegram.",
+      }),
+    ];
+
+    const beforeCounts = await getOpenBucketCounts();
+    expect(beforeCounts.espera).toBe(1);
+
+    // Agregar una segunda observación (simulando otro mensaje de Telegram) no cambia nada del WIP.
+    state.logs.push(
+      makeLogRow({
+        id: "l2",
+        maintenanceRequestId: "r1",
+        relationStatus: "RELATED",
+        fechaini: new Date(),
+        fechafin: null,
+        observaciones: "Segundo avance desde Telegram.",
+      }),
+    );
+
+    const afterCounts = await getOpenBucketCounts();
+    expect(afterCounts.espera).toBe(1);
   });
 });

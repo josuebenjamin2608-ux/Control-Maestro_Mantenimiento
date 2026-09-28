@@ -14,6 +14,7 @@ import { OperatorHighlights } from "@/components/indicadores/operator-highlights
 import { PeriodFilterBar } from "@/components/indicadores/period-filter-bar";
 import { ResponsibleAreaBreakdown } from "@/components/indicadores/responsible-area-breakdown";
 import { UpcomingCommitmentsSection } from "@/components/indicadores/upcoming-commitments-section";
+import { WipCard } from "@/components/indicadores/wip-card";
 import { YearMonthlyChart } from "@/components/indicadores/year-monthly-chart";
 import {
   Card,
@@ -216,6 +217,25 @@ export default async function IndicadoresPage({
                 <InteractiveBacklogCard backlog={backlog} />
               </CardContent>
             </Card>
+          </div>
+
+          {/*
+            3.5. WIP — para esta etapa, EXCLUSIVAMENTE Solicitudes "En
+            espera" (trabajo iniciado, aún no terminado). Reutiliza
+            openCounts.espera, el MISMO conteo que ya usa la tarjeta "En
+            espera" de "Estado actual de la operación" abajo — no dispara
+            una consulta nueva. Relación con Backlog: Backlog abierto =
+            Solicitado + En espera; WIP = En espera (un subconjunto del
+            Backlog, mostrado también como indicador propio). Nunca usa
+            Minutas — ver wip-card.tsx.
+          */}
+          <div className="flex flex-col gap-1.5">
+            <h3 className="text-sm font-semibold text-foreground">WIP (trabajo en curso)</h3>
+            <p className="text-xs text-muted-foreground">
+              Solicitudes con ESTADO = &quot;En espera&quot; — subconjunto del Backlog abierto (Solicitado + En
+              espera). Todas las fechas, sin depender de Minutas.
+            </p>
+            <WipCard count={openCounts.espera} />
           </div>
 
           {/* 4-5. Distribución por responsable — mismo universo que el Backlog, cada área expandible/contraíble. */}
