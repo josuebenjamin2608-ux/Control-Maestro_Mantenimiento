@@ -1,17 +1,20 @@
 import { AppShell } from "@/components/layout/app-shell";
-import { ImportHistoryTable } from "@/components/imports/import-history-table";
+// TEMPORAL — diagnóstico /importaciones (aislamiento del historial, NO eliminado):
+// import { ImportHistoryTable } from "@/components/imports/import-history-table";
 import { MinutasImportPanel } from "@/components/imports/minutas-import-panel";
 import { SolicitudesImportPanel } from "@/components/imports/solicitudes-import-panel";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { listImportBatches } from "@/server/services/maintenance-requests.service";
+// TEMPORAL — ver nota arriba:
+// import { listImportBatches } from "@/server/services/maintenance-requests.service";
 
 // Consulta la base de datos (historial de importaciones): debe resolverse en
 // cada request, no se puede pre-renderizar en build.
 export const dynamic = "force-dynamic";
 
 export default async function ImportacionesPage() {
-  const batches = await listImportBatches();
+  // TEMPORAL — deshabilitado mientras se aísla la causa del error en producción.
+  // const batches = await listImportBatches();
 
   return (
     <AppShell title="Importaciones">
@@ -47,7 +50,10 @@ export default async function ImportacionesPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <ImportHistoryTable batches={batches} />
+            {/* TEMPORAL — historial aislado para diagnóstico, ver notas de import arriba. */}
+            <p className="text-sm text-muted-foreground">
+              Historial de importaciones temporalmente no disponible.
+            </p>
           </CardContent>
         </Card>
       </div>
