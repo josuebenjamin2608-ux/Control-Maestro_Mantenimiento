@@ -54,8 +54,10 @@ vi.mock("@/server/services/imports/maintenance-log-import.service", () => ({
   applyMaintenanceLogImport: vi.fn(),
 }));
 
-const { previewMaintenanceRequestFile, previewMaintenanceLogFile, MAX_IMPORT_FILE_SIZE_BYTES } =
-  await import("./imports");
+const { previewMaintenanceRequestFile, previewMaintenanceLogFile } = await import("./imports");
+const { MAX_IMPORT_FILE_SIZE_BYTES } = await import(
+  "@/server/services/imports/import-security"
+);
 
 const VALID_PARSE_RESULT = { headerErrors: null, rows: [] };
 const CANNED_SUMMARY = {
