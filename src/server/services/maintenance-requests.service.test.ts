@@ -17,7 +17,8 @@ const { state } = vi.hoisted(() => ({
 
 vi.mock("@/lib/db", () => ({ db: createFakeDb(state) }));
 
-const { getOpenBucketCounts, getMaintenanceRequestByParte } = await import("./maintenance-requests.service");
+const { getOpenBucketCounts, getMaintenanceRequestByParte, getAdjacentMaintenanceRequestPartes } =
+  await import("./maintenance-requests.service");
 
 beforeEach(() => {
   state.requests = [];
@@ -148,5 +149,101 @@ describe("getMaintenanceRequestByParte — relación Solicitud <-> Minutas (PART
     const request = await getMaintenanceRequestByParte("no-existe");
 
     expect(request).toBeNull();
+  });
+});
+
+describe("getAdjacentMaintenanceRequestPartes — navegación 'Solicitud anterior/siguiente'", () => {
+  it("en medio del listado: anterior es la más reciente, siguiente la más antigua", async () => {
+    state.requests = [
+      makeRequestRow({ id: "r1", parte: "1910", fecha: daysAgo(1) }),
+      makeRequestRow({ id: "r2", parte: "1909", fecha: daysAgo(2) }),
+      makeRequestRow({ id: "r3", parte: "1908", fecha: daysAgo(3) }),
+    ];
+
+    const result = await getAdjacentMaintenanceRequestPartes({ parte: "1909", fecha: daysAgo(2) });
+
+    expect(result).toEqual({ previousParte: "1910", nextParte: "1908" });
+  });
+
+  it("la solicitud más reciente no tiene anterior", async () => {
+    state.requests = [
+      makeRequestRow({ id: "r1", parte: "1910", fecha: daysAgo(1) }),
+      makeRequestRow({ id: "r2", parte: "1909", fecha: daysAgo(2) }),
+    ];
+
+    const result = await getAdjacentMaintenanceRequestPartes({ parte: "1910", fecha: daysAgo(1) });
+
+    expect(result).toEqual({ previousParte: null, nextParte: "1909" });
+  });
+
+  it("la solicitud más antigua (sin solicitudes sin fecha) no tiene siguiente", async () => {
+    state.requests = [
+      makeRequestRow({ id: "r1", parte: "1910", fecha: daysAgo(1) }),
+      makeRequestRow({ id: "r2", parte: "1909", fecha: daysAgo(2) }),
+    ];
+
+    const result = await getAdjacentMaintenanceRequestPartes({ parte: "1909", fecha: daysAgo(2) });
+
+    expect(result).toEqual({ previousParte: "1910", nextParte: null });
+  });
+
+  it("misma FECHA: se desempata por PARTE desc, igual que el listado", async () => {
+    const sameDay = daysAgo(5);
+    state.requests = [
+      makeRequestRow({ id: "r1", parte: "1920", fecha: sameDay }),
+      makeRequestRow({ id: "r2", parte: "1915", fecha: sameDay }),
+      makeRequestRow({ id: "r3", parte: "1910", fecha: sameDay }),
+    ];
+
+    const result = await getAdjacentMaintenanceRequestPartes({ parte: "1915", fecha: sameDay });
+
+    expect(result).toEqual({ previousParte: "1920", nextParte: "1910" });
+  });
+
+  it("las solicitudes sin FECHA forman un grupo propio antes que las que sí tienen fecha", async () => {
+    state.requests = [
+      makeRequestRow({ id: "r1", parte: "1800", fecha: null }),
+      makeRequestRow({ id: "r2", parte: "1700", fecha: null }),
+      makeRequestRow({ id: "r3", parte: "1910", fecha: daysAgo(1) }),
+    ];
+
+    // La primera solicitud CON fecha (1910) tiene como "anterior" a la última
+    // sin fecha (1700, la de PARTE más chico dentro de ese grupo).
+    const fromDated = await getAdjacentMaintenanceRequestPartes({ parte: "1910", fecha: daysAgo(1) });
+    expect(fromDated).toEqual({ previousParte: "1700", nextParte: null });
+
+    // Dentro del grupo sin fecha, se navega por PARTE desc como cualquier otro.
+    const fromUndated = await getAdjacentMaintenanceRequestPartes({ parte: "1800", fecha: null });
+    expect(fromUndated).toEqual({ previousParte: null, nextParte: "1700" });
+
+    // La última sin fecha (1700) pasa a la primera CON fecha (1910) como siguiente.
+    const lastUndated = await getAdjacentMaintenanceRequestPartes({ parte: "1700", fecha: null });
+    expect(lastUndated).toEqual({ previousParte: "1800", nextParte: "1910" });
+  });
+
+  it("respeta los mismos filtros que la lista (maquina): ignora solicitudes fuera del filtro", async () => {
+    state.requests = [
+      makeRequestRow({ id: "r1", parte: "1910", fecha: daysAgo(1), maquina: "OTRA" }),
+      makeRequestRow({ id: "r2", parte: "1909", fecha: daysAgo(2), maquina: "MAQUINA-X" }),
+      makeRequestRow({ id: "r3", parte: "1908", fecha: daysAgo(3), maquina: "OTRA" }),
+      makeRequestRow({ id: "r4", parte: "1907", fecha: daysAgo(4), maquina: "MAQUINA-X" }),
+    ];
+
+    const result = await getAdjacentMaintenanceRequestPartes(
+      { parte: "1909", fecha: daysAgo(2) },
+      { maquina: "MAQUINA-X" },
+    );
+
+    // Sin el filtro, anterior/siguiente serían 1910/1908; con el filtro,
+    // ambas quedan excluidas y la única vecina real es 1907.
+    expect(result).toEqual({ previousParte: null, nextParte: "1907" });
+  });
+
+  it("una sola solicitud en el conjunto: ni anterior ni siguiente", async () => {
+    state.requests = [makeRequestRow({ id: "r1", parte: "1909", fecha: daysAgo(1) })];
+
+    const result = await getAdjacentMaintenanceRequestPartes({ parte: "1909", fecha: daysAgo(1) });
+
+    expect(result).toEqual({ previousParte: null, nextParte: null });
   });
 });

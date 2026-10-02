@@ -8,6 +8,7 @@ import { CommitmentDateField } from "@/components/solicitudes/commitment-date-fi
 import { EstadoBadge } from "@/components/solicitudes/estado-badge";
 import { MinutaTimeline } from "@/components/solicitudes/minuta-timeline";
 import { ResponsibleAreaSelect } from "@/components/solicitudes/responsible-area-select";
+import { SolicitudNavigation } from "@/components/solicitudes/solicitud-navigation";
 import { TechnicianAssignment } from "@/components/solicitudes/technician-assignment";
 import {
   Card,
@@ -17,8 +18,10 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
+  getAdjacentMaintenanceRequestPartes,
   getMaintenanceRequestByParte,
   listTechnicians,
+  type ListMaintenanceRequestsParams,
 } from "@/server/services/maintenance-requests.service";
 import { formatCalendarDate } from "@/lib/dates";
 import { formatParteDisplay } from "@/lib/parte";
@@ -34,6 +37,29 @@ function backLinkLabel(back: string | null): string {
   if (back === "/" || back.startsWith("/?")) return "Volver al Panel de control";
   if (back.startsWith("/indicadores")) return "Volver a Indicadores";
   return "Volver";
+}
+
+/**
+ * Filtros de /solicitudes (q/maquina/estado/responsable) a partir de
+ * `backHref`, SOLO si el origen es la lista misma — así "Solicitud
+ * anterior/siguiente" navega dentro del mismo conjunto filtrado desde el
+ * que se abrió esta ficha. Si se llegó desde otro lugar (Panel de control,
+ * Indicadores, Minutas, acceso directo), no hay filtro de lista que
+ * reconstruir: la navegación usa el conjunto completo sin filtrar.
+ */
+function parseListFilters(
+  backHref: string,
+): Pick<ListMaintenanceRequestsParams, "search" | "maquina" | "estado" | "responsable"> {
+  if (backHref !== "/solicitudes" && !backHref.startsWith("/solicitudes?")) return {};
+  const queryIndex = backHref.indexOf("?");
+  const query = queryIndex >= 0 ? backHref.slice(queryIndex + 1) : "";
+  const params = new URLSearchParams(query);
+  return {
+    search: params.get("q") ?? undefined,
+    maquina: params.get("maquina") ?? undefined,
+    estado: params.get("estado") ?? undefined,
+    responsable: params.get("responsable") ?? undefined,
+  };
 }
 
 function Field({ label, value }: { label: string; value: string | null | undefined }) {
@@ -78,6 +104,8 @@ export default async function SolicitudDetailPage({
 }) {
   const { parte } = await params;
   const { back } = await searchParams;
+  const backHref = sanitizeInternalPath(back) ?? "/solicitudes";
+
   const [request, technicians] = await Promise.all([
     getMaintenanceRequestByParte(decodeURIComponent(parte)),
     listTechnicians(),
@@ -87,18 +115,28 @@ export default async function SolicitudDetailPage({
     notFound();
   }
 
-  const backHref = sanitizeInternalPath(back) ?? "/solicitudes";
+  const { previousParte, nextParte } = await getAdjacentMaintenanceRequestPartes(
+    { parte: request.parte, fecha: request.fecha },
+    parseListFilters(backHref),
+  );
 
   return (
     <AppShell title={`Solicitud ${formatParteDisplay(request.parte)}`}>
       <div className="mx-auto flex max-w-4xl flex-col gap-6">
-        <Link
-          href={backHref}
-          className="flex w-fit items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="size-4" />
-          {backLinkLabel(sanitizeInternalPath(back))}
-        </Link>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Link
+            href={backHref}
+            className="flex w-fit items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft className="size-4" />
+            {backLinkLabel(sanitizeInternalPath(back))}
+          </Link>
+          <SolicitudNavigation
+            previousParte={previousParte}
+            nextParte={nextParte}
+            backHref={backHref}
+          />
+        </div>
 
         <Card>
           <CardHeader>

@@ -240,6 +240,48 @@ interface FindFirstArgs {
   orderBy?: Record<string, "asc" | "desc">;
 }
 
+/** orderBy de un solo campo o, como en Prisma real, una lista para desempate por varios campos en orden. */
+type OrderBySpec = Record<string, "asc" | "desc"> | Record<string, "asc" | "desc">[];
+
+function compareByOrderBy(a: FakeRow, b: FakeRow, orderBy: OrderBySpec | undefined): number {
+  if (!orderBy) return 0;
+  const specs = Array.isArray(orderBy) ? orderBy : [orderBy];
+  for (const spec of specs) {
+    const [field, direction] = Object.entries(spec)[0] as [string, "asc" | "desc"];
+    const cmp = compareForSort(a[field], b[field]);
+    if (cmp !== 0) return direction === "desc" ? -cmp : cmp;
+  }
+  return 0;
+}
+
+interface FindFirstMultiKeyArgs {
+  where?: WhereInput;
+  orderBy?: OrderBySpec;
+  select?: Record<string, boolean>;
+}
+
+/**
+ * findFirst con soporte de orderBy multi-campo (array) y `select` — lo que
+ * necesita getAdjacentMaintenanceRequestPartes para encontrar la solicitud
+ * anterior/siguiente por (fecha, parte). A diferencia de `maintenanceLog.
+ * findFirst` (single-field), este resuelve los specs en orden hasta
+ * encontrar desempate, igual que Prisma real.
+ */
+function findFirstMultiKey(rows: FakeRow[], args: FindFirstMultiKeyArgs = {}): FakeRow | null {
+  const matched = rows.filter((row) => matchWhere(row, args.where));
+  const sorted = args.orderBy
+    ? [...matched].sort((a, b) => compareByOrderBy(a, b, args.orderBy))
+    : matched;
+  const row = sorted[0];
+  if (!row) return null;
+  if (!args.select) return { ...row };
+  const result: FakeRow = {};
+  for (const key of Object.keys(args.select)) {
+    if (args.select[key]) result[key] = row[key];
+  }
+  return result;
+}
+
 let fakeLogIdCounter = 0;
 
 /**
@@ -253,6 +295,7 @@ export function createFakeDb(state: FakeDbState) {
     maintenanceRequest: {
       findMany: (args?: FindManyArgs) => Promise.resolve(findMany(state, state.requests, args)),
       findUnique: (args: FindUniqueArgs) => Promise.resolve(findUnique(state, state.requests, args)),
+      findFirst: (args?: FindFirstMultiKeyArgs) => Promise.resolve(findFirstMultiKey(state.requests, args)),
       count: (args?: CountArgs) => Promise.resolve(count(state.requests, args)),
       groupBy: (args: GroupByArgs) => Promise.resolve(groupBy(state.requests, args)),
     },

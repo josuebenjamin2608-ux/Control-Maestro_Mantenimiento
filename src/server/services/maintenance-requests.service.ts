@@ -115,6 +115,85 @@ export function listMaintenanceRequestsForExport(
   });
 }
 
+export interface AdjacentMaintenanceRequests {
+  previousParte: string | null;
+  nextParte: string | null;
+}
+
+/**
+ * PARTE anterior/siguiente dentro del mismo orden y filtros que
+ * listMaintenanceRequests (fecha desc, con `parte` desc como desempate
+ * estable) — para la navegación "Solicitud anterior/siguiente" de la ficha.
+ * No usa skip/take: cruza límites de página libremente, recorriendo el
+ * conjunto filtrado completo en vez de solo la página desde la que se
+ * entró.
+ *
+ * `fecha` es nullable (ver schema.prisma): Postgres ordena los NULL
+ * PRIMERO en `ORDER BY fecha DESC` (comportamiento por defecto, verificado
+ * contra la base real), así que las solicitudes sin fecha forman un grupo
+ * propio al principio del listado, ordenado por `parte` desc igual que el
+ * resto. Las dos ramas de abajo reproducen exactamente ese orden.
+ */
+export async function getAdjacentMaintenanceRequestPartes(
+  current: { parte: string; fecha: Date | null },
+  filters: Pick<ListMaintenanceRequestsParams, "search" | "maquina" | "estado" | "responsable"> = {},
+): Promise<AdjacentMaintenanceRequests> {
+  const baseWhere = buildMaintenanceRequestWhere(filters);
+  const withBase = (extra: Prisma.MaintenanceRequestWhereInput): Prisma.MaintenanceRequestWhereInput =>
+    baseWhere ? { AND: [baseWhere, extra] } : extra;
+
+  if (current.fecha === null) {
+    const [previous, firstNonNull] = await Promise.all([
+      db.maintenanceRequest.findFirst({
+        where: withBase({ fecha: null, parte: { gt: current.parte } }),
+        orderBy: { parte: "asc" },
+        select: { parte: true },
+      }),
+      db.maintenanceRequest.findFirst({
+        where: withBase({ fecha: null, parte: { lt: current.parte } }),
+        orderBy: { parte: "desc" },
+        select: { parte: true },
+      }),
+    ]);
+    const next =
+      firstNonNull ??
+      (await db.maintenanceRequest.findFirst({
+        where: withBase({ fecha: { not: null } }),
+        orderBy: [{ fecha: "desc" }, { parte: "desc" }],
+        select: { parte: true },
+      }));
+    return { previousParte: previous?.parte ?? null, nextParte: next?.parte ?? null };
+  }
+
+  const { fecha, parte } = current;
+  const [previousInGroup, next] = await Promise.all([
+    db.maintenanceRequest.findFirst({
+      where: withBase({
+        fecha: { not: null },
+        OR: [{ fecha: { gt: fecha } }, { fecha, parte: { gt: parte } }],
+      }),
+      orderBy: [{ fecha: "asc" }, { parte: "asc" }],
+      select: { parte: true },
+    }),
+    db.maintenanceRequest.findFirst({
+      where: withBase({
+        fecha: { not: null },
+        OR: [{ fecha: { lt: fecha } }, { fecha, parte: { lt: parte } }],
+      }),
+      orderBy: [{ fecha: "desc" }, { parte: "desc" }],
+      select: { parte: true },
+    }),
+  ]);
+  const previous =
+    previousInGroup ??
+    (await db.maintenanceRequest.findFirst({
+      where: withBase({ fecha: null }),
+      orderBy: { parte: "asc" },
+      select: { parte: true },
+    }));
+  return { previousParte: previous?.parte ?? null, nextParte: next?.parte ?? null };
+}
+
 /** Valores reales de MAQUINA presentes en las solicitudes, para el filtro. */
 export async function getDistinctMachines(): Promise<string[]> {
   const rows = await db.maintenanceRequest.findMany({
